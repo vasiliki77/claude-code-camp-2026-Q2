@@ -7,3 +7,6 @@
 
 # Dependencies
 node_modules/
+
+# Generated CircleMUD world data (regenerate via week0_explore/bin/convert-world)
+week0_explore/preview/data/world/**/*.json
