@@ -146,7 +146,7 @@ The extraction regex patterns (`VITALS_RE`, `LEVEL_RE`, `EXP_RE`, `LOCATION_RE`)
 - The update script approach (extract → update) avoids the "agent continuously re-derives facts" problem from Architecture 1
 - For true multi-agent coordination or complex state, this approach would need a schema/validation layer, but for single-agent learning tasks it's sufficient
 
-## 2026-07-21 , Playing the Game: Getting Stuck, and the World-Data Escape
+## Playing the Game: Getting Stuck, and the World-Data Escape
 
 With the skill and memory files in place, actually tried to level the character from 1 to 2.
 This surfaced a failure mode neither earlier architecture note anticipated: **the game world
