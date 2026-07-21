@@ -79,7 +79,7 @@ Working in `week0_explore/explore_architecture/02_agent_skills/`, asked Claude C
 
 Also visited https://github.com/anthropics/skills and added it as a plugin marketplace to try installing pre-built skills from it:
 
-``
+```
 /plugin marketplace add anthropics/skills
 ```
 
