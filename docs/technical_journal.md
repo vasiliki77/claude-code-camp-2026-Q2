@@ -246,3 +246,38 @@ Two loose ends from the entry above got closed the same day, plus a terminology 
 - **The skill/agent boundary is enforced by directory + filename scanning, not by instruction.** Asking the model to "run it as a skill" cannot make the `Skill` tool find something it didn't discover — the available-skills list for a session is fixed by what actually got scanned, not by what's requested mid-conversation.
 - **A byte-diff is a cheap, strong verification tool for a port.** Rather than re-reading both files by eye, diffing them confirmed in one command that nothing except the intended path changes had drifted — worth reaching for whenever "did the port change anything it shouldn't have" is the actual question.
 - **"Verified" needs to name what was exercised.** The earlier version of this entry said the port was verified, but only the scripts had been called directly — the agent's own invocation path was a separate, larger claim that stayed unproven until it was actually spawned. Distinguishing "the code path works" from "the interface I claimed works, works" caught a real gap here and is worth treating as a standing habit, not a one-off correction.
+
+### 2026-07-22 — Architecture 3b: Programmatic `AgentDefinition`, and a Real Multi-Character Bug
+
+Replaced filesystem discovery in `03b_subagent_sdk/` with an SDK-constructed subagent: `mud-player` is now built in code via Python `claude-agent-sdk`'s `AgentDefinition`, passed into `ClaudeAgentOptions(agents={...})`, instead of `.claude/agents/mud-play.md` being auto-scanned.
+
+**Setup:**
+- New driver `scripts/run_agent.py` — interactive loop (`ClaudeSDKClient`, `query()`/`receive_response()` per turn), not one-shot.
+- Prompt still authored as markdown with YAML frontmatter, at `agents/mud-player.md` (renamed from an initial `prompts/`). `run_agent.py` parses it itself — split on `---\n`, `key: value` per frontmatter line, no yaml dependency — rather than relying on directory scanning.
+- Copied `scripts/mud.py`, `scripts/update_memory.py`, `data/player.md`, `data/world.md` from `03a_subagent_sdk/`; rewrote path references in the prompt from `.claude/agents/scripts/…`/`.claude/agents/data/…` to `scripts/…`/`data/…`.
+- Deleted `.claude/agents/mud-play.md` — two competing definitions under the same agent name otherwise.
+- `claude-agent-sdk` wasn't installed anywhere in the repo; installed via pip (0.2.125).
+
+**Harness quirk: restricting the orchestrator's own tools broke subagent spawning.**
+- This CLI names the subagent tool `Agent`, not `Task` as the plan assumed.
+- `ClaudeAgentOptions(tools=["Task"])` (wrong name), and separately `tools=["Agent"]` or `disallowed_tools=[...]`, both made `AgentDefinition(tools=["Bash","Read","Write"])` fail: `Agent 'mud-player' would be spawned with zero tools — refusing. Its tools list resolved to nothing: unrecognized [Bash, Read, Write]` — despite those being valid top-level tool names.
+- Fix: leave the orchestrator's `tools` unset; enforce delegation only via `system_prompt`.
+- The `Agent` tool also launches subagents as background/async tasks non-deterministically by default (returns before the subagent finishes, resumed later via `SendMessage`). Added an explicit "invoke synchronously, do not set run_in_background" line to `system_prompt` to get a reliable same-turn answer.
+
+**Real bug, found live: user asked to run `dummy` and `smarty` as two concurrent subagents; session got stuck.**
+- Root cause: `mud.py`'s `state_dir()` keyed sessions only by `host-port`, so both characters shared one daemon/socket/transcript at `~/.mud-player/localhost-4000/`.
+- Compounding: "smarty" wasn't an existing character, so the server dropped into its new-character wizard (confirm name → password → retype password → sex → class) — a flow `login()` never handled, so it timed out (`daemon.err`: `timed out waiting for a login prompt`).
+- The smarty subagent wrote its own ad-hoc `scripts/create_char.py` to walk the wizard by hand, then got stuck in an infinite retry loop at the class prompt (kept resending something the server rejected — `That's not a class.` on repeat). That loop, not the daemon, is what actually wedged the user's terminal.
+
+**Fixes to `scripts/mud.py`:**
+- `state_dir()` now keys on `host-port-user`. Verified: `dummy` and `smarty` running concurrently in separate dirs (`~/.mud-player/localhost-4000-dummy`, `…-smarty`), independent `score` queries — dummy hungry/thirsty, smarty not.
+- `login()` extended to handle the creation wizard natively: `did i get that right` → `y`, `give me a password` → password, `retype password` → password, `what is your sex` → `--sex`, `select a class` → `--class`. New flags `--sex {M,F}` (default `M`) / `--class {C,T,W,M}` (default `W`), only consulted when `--user` is a brand-new name. Exact prompt sequence learned by probing the raw socket with a throwaway script first.
+- `cmd_reset()` had a pre-existing latent bug, surfaced but not caused by this session: always hardcoded reconnecting as `dummy`/`helloworld` regardless of whose session was being reset. Fixed to forward the real invocation's args (`argparse.Namespace(**vars(args))`).
+- Removed `scripts/create_char.py` — superseded by native `login()` handling.
+- Verified end-to-end: created a disposable brand-new character (`Newbington`) via `mud.py` alone, no manual script, reached the game in one call.
+
+**Conclusions:**
+- **A tool name assumed from a plan doc isn't guaranteed to match the runtime.** The plan said "Task tool"; this harness calls it `Agent`. Worth confirming the real name before coding a restriction around it.
+- **Restricting a parent's tool list can break its subagents' tool resolution**, in this harness at least — not just the parent's own capabilities. Soft enforcement via `system_prompt` proved more reliable than a hard `tools`/`disallowed_tools` restriction.
+- **The single-shared-daemon assumption from Architecture 2/3a (one character at a time) breaks silently once two agents share a host:port.** Nothing errored at the "two characters" framing — it just handed the second agent the first agent's session.
+- **A stuck subagent will improvise around a real gap rather than surface it as a clean error.** `create_char.py` was a reasonable workaround for a genuine missing feature (character creation), but its own bug turned a fixable gap into a silent infinite loop — worth treating "the agent wrote its own script mid-task" as a signal to check for a missing base capability, not just as resourcefulness.
