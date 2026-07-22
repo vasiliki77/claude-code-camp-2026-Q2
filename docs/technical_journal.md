@@ -281,3 +281,10 @@ Replaced filesystem discovery in `03b_subagent_sdk/` with an SDK-constructed sub
 - **Restricting a parent's tool list can break its subagents' tool resolution**, in this harness at least — not just the parent's own capabilities. Soft enforcement via `system_prompt` proved more reliable than a hard `tools`/`disallowed_tools` restriction.
 - **The single-shared-daemon assumption from Architecture 2/3a (one character at a time) breaks silently once two agents share a host:port.** Nothing errored at the "two characters" framing — it just handed the second agent the first agent's session.
 - **A stuck subagent will improvise around a real gap rather than surface it as a clean error.** `create_char.py` was a reasonable workaround for a genuine missing feature (character creation), but its own bug turned a fixable gap into a silent infinite loop — worth treating "the agent wrote its own script mid-task" as a signal to check for a missing base capability, not just as resourcefulness.
+
+### Architecture 4: n8n (Blocked on API Credits)
+
+- **Not built yet:** no Claude API key exists for this account — creating one requires credits on the Anthropic platform, and there are none. `04_n8n/` has no working architecture as a result.
+- Watched the lecture covering Architecture 4 (n8n-based orchestration) anyway.
+- Installed n8n and ran it on localhost, so the tool itself is set up and ready once the API key blocker clears.
+- Finally caught up with week0 
