@@ -10,5 +10,9 @@ node_modules/
 __pycache__/
 *.pyc
 
+# Python virtual environments
+.venv/
+venv/
+
 # Generated CircleMUD world data (regenerate via week0_explore/bin/convert-world)
 week0_explore/preview/data/world/**/*.json

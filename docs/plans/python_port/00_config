@@ -1,0 +1,268 @@
+# Port Plan — Step 00: Configuration (Ruby → Python)
+
+Port the `Boukensha::Config` step from the Ruby baseline to Python, producing a
+Python package that reads **the same `.boukensha/` directory** as the Ruby
+version and prints **the same example output**.
+
+This is the first of thirteen steps (`00_config` → `12_context`). The plan is
+deliberately literal: mirror the Ruby structure one-to-one rather than
+redesigning it, so later steps port mechanically and the two implementations
+stay comparable.
+
+---
+
+## Decisions (settled — do not re-litigate)
+
+- **Environment: `pip` + `requirements.txt`.** Not `uv`, not `poetry`, not
+  `pyproject.toml`. One `requirements.txt` per step folder, mirroring the Ruby
+  side's one `Gemfile` per step.
+- **Config data shape: plain `dict` + a ported `dig()` helper.** No pydantic,
+  no dataclasses, no schema models. `yaml.safe_load()` returns a dict and that
+  dict is what gets passed around — same as the Ruby passes a raw hash.
+- **Structure: snapshot per step, mirroring Ruby.** Each step folder
+  (`python/00_config/`, `python/01_struct_skeleton/`, …) is a **complete,
+  self-contained copy** of the code at that step, exactly like
+  `ruby/00_config/` … `ruby/12_context/`. Steps are not imported from each
+  other and there is no shared library directory — step *N+1* starts as a copy
+  of step *N* and is edited in place. Duplication across step folders is
+  intentional: it is what makes each step independently runnable and lets you
+  diff step *N* against *N+1* to see exactly what that iteration added.
+
+---
+
+## Source files to port
+
+Read every file below before writing any Python. These are the complete inputs
+for this step — there is nothing else to port.
+
+| Ruby source (read this) | Purpose |
+|---|---|
+| `week1_baseline/ruby/00_config/lib/boukensha.rb` | Top-level requires — the package's public surface |
+| `week1_baseline/ruby/00_config/lib/boukensha/config.rb` | **`Boukensha::Config`** — the whole point of this step |
+| `week1_baseline/ruby/00_config/lib/boukensha/tasks/base.rb` | Abstract `Tasks::Base` — provider/model/prompt resolution |
+| `week1_baseline/ruby/00_config/lib/boukensha/tasks/player.rb` | Concrete `Tasks::Player` (just sets `task_name = "player"`) |
+| `week1_baseline/ruby/00_config/examples/example.rb` | The smoke test whose output must be reproduced |
+| `week1_baseline/ruby/00_config/prompts/system.md` | Default system prompt shipped with the library |
+| `week1_baseline/ruby/00_config/Gemfile` | Dependency list (only `dotenv`) |
+
+Supporting context (read for intent, do not port):
+
+| File | Why |
+|---|---|
+| `week1_baseline/ruby/00_config/README.md` | The step's spec: config-dir resolution order, directory structure, config schema, expected example output |
+| `week1_baseline/ruby/ITERATIONS.md` | Week 1 design constraints — §"0 Configuration", plus the standard-library-first rule |
+| `docs/technical_journal/24-07-2026.md` | The two failures hit getting the Ruby version running (missing gem, misplaced/misnamed `settings.yaml`) — do not reintroduce them |
+
+Live config the port must consume (already exists, do not modify):
+
+```
+.boukensha/
+  .env                       # ANTHROPIC_API_KEY
+  settings.yaml              # tasks.player.{provider,model,prompt_override}, mud.*
+  prompts/player/system.md   # per-task prompt override
+```
+
+---
+
+## Target layout
+
+```
+week1_baseline/python/00_config/
+├── requirements.txt            # ← mirrors Gemfile
+├── boukensha/
+│   ├── __init__.py             # ← lib/boukensha.rb
+│   ├── config.py               # ← lib/boukensha/config.rb
+│   └── tasks/
+│       ├── __init__.py
+│       ├── base.py             # ← lib/boukensha/tasks/base.rb
+│       └── player.py           # ← lib/boukensha/tasks/player.rb
+├── prompts/
+│   └── system.md               # ← copied verbatim from ruby/00_config/prompts/
+└── examples/
+    └── example.py              # ← examples/example.rb
+```
+
+Plus a launcher at `week1_baseline/bin/00_config_py` mirroring the existing
+`week1_baseline/bin/00_config` (see Open Question 7 on naming). It should `cd`
+into the step folder and invoke the venv's interpreter directly
+(`.venv/bin/python examples/example.py`) so no manual `activate` is needed —
+the Ruby launcher's `bundle exec` equivalent.
+
+Setup, per step folder:
+
+```sh
+cd week1_baseline/python/00_config
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Because each step is a self-contained snapshot, each gets its own `.venv`.
+`requirements.txt` will be identical across several consecutive steps — that
+is expected, not redundancy to factor out.
+
+**Add `.venv/` to `.gitignore`** before creating one — the repo's `.gitignore`
+currently has `__pycache__/` but no venv entry, and Week 0 already has an
+uncommitted `.venv` under `week0_explore/circlemud-world-parser/`.
+
+---
+
+## Ruby → Python translation notes
+
+For each Ruby idiom in the source, the intended Python equivalent. Where the
+Ruby does something only Ruby needs, the Python should **simplify rather than
+imitate**.
+
+### `config.rb`
+
+| Ruby | Python |
+|---|---|
+| `module Boukensha; class Config` | `boukensha/config.py`, `class Config` |
+| `DEFAULT_DIR = File.join(Dir.home, ".boukensha")` | `DEFAULT_DIR = Path.home() / ".boukensha"` |
+| `PROMPTS_DIR = File.expand_path("../../prompts", __dir__)` | `PROMPTS_DIR = Path(__file__).parents[1] / "prompts"` — resolves to `00_config/prompts`. **Verify this index against the final layout**; it changes if a `src/` layout is chosen (Open Question 2). |
+| `attr_reader :dir, :settings` | Plain public attributes `self.dir`, `self.settings` |
+| `ENV.fetch("BOUKENSHA_DIR", nil) \|\| DEFAULT_DIR` | `os.environ.get("BOUKENSHA_DIR") or DEFAULT_DIR` |
+| `Pathname.new(raw).expand_path.to_s` | `Path(raw).expanduser().resolve()` — `expand_path` expands `~`, so `expanduser()` is required, not optional |
+| `Dotenv.load(env_file) if File.exist?(env_file)` | `dotenv.load_dotenv(env_file)` — both default to **not** overriding already-set env vars, so parity holds. Do not pass `override=True` |
+| `YAML.safe_load(File.read(f)) \|\| {}` | `yaml.safe_load(f.read_text()) or {}` — the `or {}` matters: an empty YAML file parses to `None`, not `{}` |
+| `node[key.to_s] \|\| node[key.to_sym]` | Just `node.get(key)`. Ruby needs the string/symbol dance because YAML keys are strings but callers pass symbols; Python has no symbols, so **this collapses to a single lookup everywhere it appears** |
+| `def dig(*keys)` with `reduce` | A small `dig(*keys)` helper walking nested dicts, returning `None` on any non-dict node — same shape, or `functools.reduce` if preferred |
+| `tasks(name = nil)` | `tasks(name=None)` — no arg returns the whole dict, a name returns that task's dict |
+| `def to_s` / `def inspect = to_s` | `__str__` and `__repr__ = __str__` |
+
+### `tasks/base.py`
+
+The Ruby class is **stateless** — every method is a class method taking a
+`settings` dict; no instances are ever created. Keep that shape (`@classmethod`)
+rather than making it Pythonic-but-different, so later steps that call
+`Tasks::Player.provider(...)` port line-for-line.
+
+| Ruby | Python |
+|---|---|
+| `def self.task_name; raise NotImplementedError` | `@classmethod def task_name(cls): raise NotImplementedError` |
+| `def self.provider(settings)` … `\|\| raise(ArgumentError, "...")` | `@classmethod def provider(cls, settings)` … raise `ValueError` with the same message text |
+| `class << self; private` | Prefix with `_` (`_fetch`, `_read_user_prompt`, …) |
+| `File.exist?(path) ? File.read(path).strip : nil` | `p.read_text().strip() if p.exists() else None` |
+| Keyword args `user_prompts_dir:`, `default_prompts_dir:` | Keyword-only args (`*, user_prompts_dir=None, default_prompts_dir=None`) |
+
+Prompt resolution order must stay identical: task override
+(`.boukensha/prompts/<task>/system.md`, only when `prompt_override.system` is
+`true`) → packaged default (`prompts/system.md`).
+
+### `example.py`
+
+| Ruby | Python |
+|---|---|
+| `ENV["BOUKENSHA_DIR"] \|\|= File.expand_path("../../../../.boukensha", __dir__)` | `os.environ.setdefault("BOUKENSHA_DIR", str(Path(__file__).parents[4] / ".boukensha"))` |
+| `&.slice(0, 60)` (safe navigation) | `(prompt or "")[:60]` |
+| `require_relative "../lib/boukensha"` | `sys.path.insert(0, str(Path(__file__).parents[1]))` before `from boukensha.config import Config`. Needed because running `python examples/example.py` puts `examples/` on `sys.path`, not the step folder — without it, `import boukensha` fails. This is the direct analogue of `require_relative` and keeps the script runnable from any working directory |
+
+The path arithmetic is the same count in both trees — `examples/` → step dir →
+language dir → `week1_baseline/` → repo root — so **4 levels up** in both.
+This is the exact bug fixed on 2026-07-24; get it right the first time here.
+
+---
+
+## Dependencies
+
+| Ruby gem | Python package | Note |
+|---|---|---|
+| `dotenv` | `python-dotenv` | Direct equivalent |
+| *(stdlib `yaml`)* | `PyYAML` | **Deviation worth flagging:** YAML is in Ruby's standard library but not Python's. Week 1's "standard library first" rule (`ITERATIONS.md`) cannot be honoured here without changing the settings file format, which would break sharing `settings.yaml` with the Ruby implementation. Taking `PyYAML` is the recommended trade — see Open Question 2 |
+
+Everything else (`pathlib`, `os`) is stdlib.
+
+Pin both with `==` in `requirements.txt` (the Ruby side has a `Gemfile.lock`;
+pinned versions are the closest `pip`/`requirements.txt` equivalent, and each
+step's snapshot should reproduce exactly).
+
+---
+
+## Verification
+
+The port is done when all of the following pass:
+
+1. `week1_baseline/ruby/00_config` example still runs unchanged (no regression).
+2. The Python example runs and prints the same values:
+   ```
+   Config dir:     <repo>/.boukensha
+   Tasks:          player
+   Provider:       anthropic
+   Model:          claude-haiku-4-5
+   Prompt override?true
+   System prompt:  You are a MUD Journey Player Agent. You are playing the MUD ...
+   MUD host:       localhost:4000
+   MUD user:       dummy
+   API key set?    true
+   ```
+3. A literal `diff` of the two programs' stdout is empty (depends on Open
+   Question 4 — whether the final `#<Boukensha::Config …>` line is reproduced
+   verbatim).
+4. Deleting/renaming `.boukensha/settings.yaml` produces a clear error naming
+   the missing file — **not** an opaque `NoneType` crash three calls later
+   (depends on Open Question 3).
+
+---
+
+## Open Questions
+
+Answers needed before implementation; each lists a recommended default.
+(Environment tooling, config data shape, and per-step structure are already
+settled above under **Decisions** — package layout follows from them: flat
+`boukensha/` next to `examples/`, since nothing is being built or installed as
+a wheel.)
+
+1. **Python version.** System Python is 3.12.2; the Week 0 venv used 3.14.
+   *Recommend:* build against system 3.12.2 and note it in the step's README
+   pointer, so `python3 -m venv .venv` just works with no version manager.
+   — **Go with recommendation**
+
+2. **`PyYAML` dependency.** Accept it as a necessary exception to the
+   standard-library-first rule, or switch the settings file to TOML (stdlib
+   `tomllib`) — which would mean Ruby and Python no longer read the same
+   `settings.yaml`.
+   *Recommend:* accept `PyYAML`; shared config file is worth more than the
+   purity rule. — **Go with recommendation**
+
+3. **Reproduce the silent-`{}` fallback, or fix it?** The Ruby returns an empty
+   dict when `settings.yaml` is missing, which is exactly what made
+   2026-07-24's debugging painful (the real error surfaced later as a `nil`
+   crash). Fixing it in Python means the two implementations behave differently
+   on a missing file.
+   *Recommend:* fix it in Python (raise `FileNotFoundError` naming the resolved
+   path), and note the divergence in the journal. — **Fix**
+
+4. **Match Ruby's `__repr__` string exactly?** Ruby prints
+   `#<Boukensha::Config dir=… tasks=player>`. Reproducing that verbatim makes
+   output diffing a one-command check; a Pythonic `<Config dir=… tasks=player>`
+   reads better but breaks the clean diff.
+   *Recommend:* match verbatim for now — cheap, and diffability is the main
+   verification tool for the next twelve ports. — **Agree**
+
+5. **Shared `.boukensha/` directory — confirmed?** The plan assumes Python and
+   Ruby read the **same** repo-root `.boukensha/` (same `settings.yaml`, same
+   `.env`, same `prompts/`), so a config change applies to both.
+   *Recommend:* yes, shared. — **Confirm**
+
+6. **Launcher naming.** `week1_baseline/bin/00_config` is taken by the Ruby
+   version. Options: `bin/00_config_py`, or restructure to
+   `bin/ruby/00_config` + `bin/python/00_config`.
+   *Recommend:* `bin/00_config_py` now; restructure only if it gets unwieldy by
+   step 12. — **I created subfolders in bin, so we have bin/python/ and bin/ruby, please fix the pathing for ruby and create a new bin script for running the python**
+
+7. **Does the Python step need its own `README.md`?** The Ruby step has a
+   detailed one.
+   *Recommend:* no — a short pointer back to the Ruby README, so the spec has
+   one home and can't drift. — **Disagree, the goal is to make a resusable baseline agent**
+
+8. **Tests?** The Ruby step has none — `examples/example.rb` is the smoke test.
+   *Recommend:* match it (no test framework at step 00), and reconsider once
+   there's real logic to test (step 02, the registry). — **No test suites, just example file we should have and we can test that way**
+
+9. **Port cadence.** Port step 00 alone and validate the approach, or port
+   several steps at once?
+   *Recommend:* 00 alone first — the translation conventions established here
+   (stateless classmethods, no symbol/string dance, path arithmetic) apply to
+   every later step, so getting them right once pays off twelve times.
+   — **we will be porting one step at a time**
+
+10. Create a .venv file and add that to Python's README at the top, we should expect the user to create the environment based on our instructions and assume the environment will be there, maybe the venv should be loaded at the root of the project because we will be creating iterations in future folders and having a single python env in a single place will make things easier.
