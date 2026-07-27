@@ -32,9 +32,10 @@ Once finished, this baseline agent becomes the "golden template" to reuse whenev
 
 ## Technical Observations
 
-Day-by-day detail is in [24-07-2026](24-07-2026.md). Summary so far:
+Day-by-day detail is in [24-07-2026](24-07-2026.md) and [27-07-2026](27-07-2026.md). Summary so far:
 
 - **Step 0 (Configuration)** — first run of `week1_baseline/bin/00_config` failed twice before working: once on a missing `dotenv` gem (`bundle install` fixed it), once on a config file that was both misnamed (`settings.yml` instead of the `settings.yaml` the code looks for) and misplaced (repo root instead of the directory `BOUKENSHA_DIR` actually resolves to). The underlying failure — `Config` silently returning `{}` when no settings file is found, rather than erroring — meant the real problem (file not found) surfaced several calls later as an opaque `NoMethodError` on `nil`, not as a config error.
+- **Step 1 (Struct Skeleton)** — ported the three plain data containers (`Tool`, `Message`, `Context`) from Ruby to Python. Ruby `Struct`s became Python `@dataclass`es; `Context` stayed a plain class in both. The port was applied as the delta between step 0 and step 1 (the step-1 Python folder started as a copy of the step-0 one), which bore out the earlier hypothesis that porting is mostly mechanical when the design doesn't change. Verification is a literal `diff` of the Ruby and Python example output, which is empty — the byte-for-byte match required matching Ruby's `to_s` exactly (inclusive-range off-by-ones, an always-appended `...`, and Ruby symbol-form key rendering `[:direction]`).
 
 ## Technical Conclusions
 

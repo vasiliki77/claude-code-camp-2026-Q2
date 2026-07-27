@@ -1,0 +1,251 @@
+# Port Plan — Step 01: The Struct Skeleton (Ruby → Python)
+
+Port the `Boukensha::Tool`, `Boukensha::Message`, and `Boukensha::Context` data
+structures from the Ruby baseline into the Python step folder, so
+`python/01_struct_skeleton/` reads the same `.boukensha/` directory and prints
+the same example output as `ruby/01_struct_skeleton`.
+
+This is the second of thirteen steps (`00_config` → `12_context`). Step 01 is
+substantively step 00 **plus three data containers and a rewritten example** —
+the config machinery does not change in behaviour.
+
+---
+
+## Starting state (already done — do not redo)
+
+`week1_baseline/python/01_struct_skeleton/` **already exists** as a byte-for-byte
+copy of `python/00_config/` (verified: every file is identical, including the
+stale `prompts/system.md` and the step-00 `README.md`). The snapshot copy is
+done. This plan is therefore **not** "port step 01 from scratch" — it is the
+exact set of edits, additions, and deletions that turn the copied-00 folder into
+the real step 01, matching what Ruby changed between the two steps.
+
+The repo-root `.venv/` already exists and already has this step's deps
+(`requirements.txt` is unchanged from 00), so there is no environment setup.
+
+---
+
+## Decisions (carried over from step 00 — settled, do not re-litigate)
+
+- **One shared `.venv/` at the repo root**, reused by every Python step. `pip` +
+  `requirements.txt`, no `uv`/`poetry`/`pyproject.toml`.
+- **Config payload stays a plain `dict` + `dig()`** — no pydantic. (This was
+  about the YAML config data, not value objects; see Open Question 1.)
+- **Self-contained snapshot per step** — duplication across step folders is
+  intentional and enables diffing step *N* against *N+1*.
+- **Missing `settings.yaml` raises `FileNotFoundError`** (Python's deliberate
+  divergence from Ruby's silent `{}`). Already present in the copied `config.py`;
+  leave it.
+- **`__str__` / `__repr__` matched to Ruby verbatim** — stdout diffing is the
+  primary verification tool.
+- **Shared repo-root `.boukensha/`**, **no test framework** (the example is the
+  smoke test), **`PyYAML` accepted** as a standard-library-first exception.
+
+---
+
+## What Ruby changed between step 00 and step 01
+
+Confirmed by diffing `ruby/00_config` against `ruby/01_struct_skeleton`:
+
+| Change | Ruby |
+|---|---|
+| **New** `lib/boukensha/tool.rb` | `Tool = Struct.new(:name, :description, :parameters, :block)` + `to_s` |
+| **New** `lib/boukensha/message.rb` | `Message = Struct.new(:role, :content, :tool_use_id)` + `to_s` |
+| **New** `lib/boukensha/context.rb` | Real `class Context` — holds `task`, `system`, `messages`, `tools`; methods `register_tool`, `add_message`, `tool_count`, `turn_count`, `to_s` |
+| `lib/boukensha.rb` | Adds three `require_relative` lines for the new files |
+| `lib/boukensha/config.rb` | **Removes** the `PROMPTS_DIR` constant |
+| `prompts/system.md` | **Deleted** — step 01 ships no packaged default prompt |
+| `examples/example.rb` | Rewritten: builds a `Context`, registers one `Tool`, adds two `Message`s, prints them |
+
+`tasks/base.rb`, `tasks/player.rb`, `Gemfile` are byte-identical between the two
+Ruby steps — the matching Python files in the copied folder are already correct
+and need no touching.
+
+> The last three rows are coupled: because `player`'s `prompt_override.system`
+> is `true` and `.boukensha/prompts/player/system.md` exists, the example's
+> `system_prompt` resolves via the **user override** and never needs a packaged
+> default — which is why Ruby could delete both `PROMPTS_DIR` and
+> `prompts/system.md` this step. The Python port mirrors that (see OQ 3).
+
+---
+
+## Read before writing
+
+| Ruby source (read this) | Purpose |
+|---|---|
+| `week1_baseline/ruby/01_struct_skeleton/lib/boukensha/tool.rb` | **`Tool`** struct |
+| `week1_baseline/ruby/01_struct_skeleton/lib/boukensha/message.rb` | **`Message`** struct |
+| `week1_baseline/ruby/01_struct_skeleton/lib/boukensha/context.rb` | **`Context`** class |
+| `week1_baseline/ruby/01_struct_skeleton/lib/boukensha.rb` | Updated public surface (three new requires) |
+| `week1_baseline/ruby/01_struct_skeleton/examples/example.rb` | The smoke test whose output must be reproduced |
+
+Supporting context (read for intent, do not port):
+
+| File | Why |
+|---|---|
+| `week1_baseline/ruby/01_struct_skeleton/README.md` | Field-by-field description of Tool/Message/Context and the `to_s` example formats |
+| `week1_baseline/ruby/ITERATIONS.md` §"1 The Struct Skeleton" | "Plain data containers. No logic yet, just the shapes." |
+| `week1_baseline/python/00_config/example.py` | Python idioms already established (sys.path insert, `setdefault`) — reuse verbatim where unchanged |
+
+Live config consumed (do not modify): the repo-root `.boukensha/` — same
+`.env`, `settings.yaml`, and `prompts/player/system.md` as step 00.
+
+---
+
+## The work — a checklist over the existing folder
+
+### ➕ Add — three new modules under `boukensha/`
+
+**`boukensha/tool.py`** ← `lib/boukensha/tool.rb`. Ruby
+`Struct.new(:name, :description, :parameters, :block)`, positional construction,
+custom `to_s`. Port as a `@dataclass` (the faithful Struct analogue — OQ 1):
+
+| Ruby | Python |
+|---|---|
+| `Struct.new(:name, :description, :parameters, :block)` | `@dataclass` fields `name: str`, `description: str`, `parameters: dict`, `block: Callable` |
+| `description.to_s[0..40]` | `str(self.description)[:41]` — **`0..40` is inclusive = 41 chars** → `[:41]`, not `[:40]` |
+| `params=#{parameters.keys}` | Render as `[:direction]`, not `['direction']` (OQ 2): `"[" + ", ".join(f":{k}" for k in self.parameters) + "]"` |
+
+Target `__str__`: `#<Tool name={name} description={desc[:41]} params=[:direction]>`.
+
+**`boukensha/message.py`** ← `lib/boukensha/message.rb`. `@dataclass` fields
+`role`, `content`, `tool_use_id=None` (last optional — the example omits it):
+
+| Ruby | Python |
+|---|---|
+| `role` is a symbol `:user` | Python passes the string `"user"`; both render as `user` — no change needed |
+| `id_tag = tool_use_id ? " [#{tool_use_id}]" : ""` | `f" [{self.tool_use_id}]" if self.tool_use_id else ""` |
+| `content.to_s[0..60]` | `str(self.content)[:61]` — inclusive → `[:61]` |
+| trailing `...` | Always appended, even when content is shorter than 61 chars (verified) — not conditional |
+
+Target `__str__`: `#<Message role={role}{id_tag} content={content[:61]}...>`.
+
+**`boukensha/context.py`** ← `lib/boukensha/context.rb`. A stateful plain class
+(Ruby made it a class, not a Struct — keep that):
+
+| Ruby | Python |
+|---|---|
+| `def initialize(task:, system: nil)` | `def __init__(self, *, task, system=None)` — keyword-only, `task` required |
+| `@messages = []`, `@tools = {}` | `self.messages = []`, `self.tools = {}` |
+| `register_tool(tool)` → `@tools[tool.name] = tool` | same, `self.tools[tool.name] = tool` |
+| `add_message(role, content, tool_use_id: nil)` | `self.messages.append(Message(role, content, tool_use_id))` |
+| `tool_count = @tools.size` / `turn_count = @messages.size` | `def tool_count(self): return len(self.tools)` / `turn_count` likewise |
+| `task&.task_name` | `self.task.task_name() if self.task else None` — **note the `()`**: Python needs it to call the classmethod |
+
+Target `__str__`: `#<Context task={task_name} turns={turn_count} tools={tool_count}>`.
+
+### ➕ Add — the launcher
+
+**`week1_baseline/bin/python/01_struct_skeleton`** — copy of the existing
+`bin/python/00_config` with both `00_config` path segments changed to
+`01_struct_skeleton`; `chmod +x` it. (The Ruby launcher
+`bin/ruby/01_struct_skeleton` already exists and is untracked — no change.)
+
+### ✏️ Edit — three existing files
+
+**`boukensha/__init__.py`** — add the three exports:
+
+```python
+from .config import Config
+from .tasks import Base, Player
+from .tool import Tool
+from .message import Message
+from .context import Context
+
+__all__ = ["Config", "Base", "Player", "Tool", "Message", "Context"]
+```
+
+**`boukensha/config.py`** — delete the `PROMPTS_DIR` class attribute and its
+comment (the only change; everything else stays).
+
+**`examples/example.py`** — rewrite the body to the step-01 example. Keep the
+unchanged 00 preamble (the `sys.path.insert(...)` and
+`os.environ.setdefault("BOUKENSHA_DIR", str(Path(__file__).resolve().parents[4] / ".boukensha"))`
+— still **4 levels up**, same tree depth as 00):
+
+| Ruby (01 example) | Python |
+|---|---|
+| `system_prompt(player_settings, user_prompts_dir: config.user_prompts_dir)` | Same call, **no `default_prompts_dir`** (resolves via the user override) |
+| `Context.new(task: Tasks::Player, system: system_prompt)` | `Context(task=Player, system=system_prompt)` — pass the **class**, not an instance |
+| `Tool.new("move", "...", { direction: {...} }, ->(direction){...})` | `Tool("move", "...", {"direction": {"type": "string", "description": "The direction to move"}}, lambda direction: "You move ...")` — `block` stored, **not invoked** this step |
+| `ctx.add_message(:user, "...")` | `ctx.add_message("user", "...")` — string, not symbol |
+| `ctx.tools['move']` | `ctx.tools["move"]` |
+| `ctx.messages.each { |m| puts "  #{m}" }` | `for m in ctx.messages: print(f"  {m}")` |
+
+Match the print layout exactly (`Config:   `, `Context:  `, `Tool:     `,
+`Messages:`, then two-space-indented message lines).
+
+**`README.md`** — adapt the copied step-00 README to step 01: retitle, point at
+the Ruby 01 README for the spec, list the new `boukensha/` modules, and document
+only the Python-specific rendering choices (the `[:41]`/`[:61]` truncations, the
+`[:direction]` symbol rendering). Keep it short (OQ 4).
+
+### 🗑️ Delete
+
+**`prompts/system.md`** (and the now-empty `prompts/` directory) — step 01 ships
+no packaged default prompt, mirroring Ruby (OQ 3). The copied folder still has
+the step-00 version; remove it.
+
+### ✅ Leave untouched (copied correctly from 00)
+
+`boukensha/tasks/base.py`, `boukensha/tasks/player.py`,
+`boukensha/tasks/__init__.py`, `requirements.txt` — all identical between Ruby
+steps 00 and 01, so the copies are already right.
+
+---
+
+## Verification
+
+Done when all pass:
+
+1. `./week1_baseline/bin/ruby/01_struct_skeleton` still runs unchanged.
+2. `./week1_baseline/bin/python/01_struct_skeleton` prints exactly (captured from
+   the Ruby run):
+   ```
+   === Boukensha Step 1: Struct Skeleton ===
+
+   Config:   #<Boukensha::Config dir=<repo>/.boukensha tasks=player>
+   Context:  #<Context task=player turns=2 tools=1>
+   Tool:     #<Tool name=move description=Move the player in a direction (north, so params=[:direction]>
+   Messages:
+     #<Message role=user content=Explore north and tell me what you find....>
+     #<Message role=assistant content=Sure, let me head north and take a look....>
+   ```
+3. A literal diff of the two programs' stdout is **empty**:
+   ```sh
+   diff <(./week1_baseline/bin/ruby/01_struct_skeleton) \
+        <(./week1_baseline/bin/python/01_struct_skeleton)
+   ```
+   This is the real gate — it catches the two off-by-one truncations (`[:41]`,
+   `[:61]`), the always-appended `...`, and the `[:direction]` rendering at once.
+4. `prompts/system.md` is gone and nothing references `PROMPTS_DIR`
+   (`grep -r PROMPTS_DIR week1_baseline/python/01_struct_skeleton` is empty).
+
+---
+
+## Open Questions
+
+New to step 01; each lists a recommended default. (Everything under
+**Decisions** is settled — do not resurface it.)
+
+1. **`@dataclass` vs plain class for `Tool`/`Message`?** A Ruby `Struct` is a
+   lightweight auto-generated value class — `@dataclass` is its direct Python
+   analogue, and the step README frames these as lightweight structs. The 00
+   "no dataclasses" call was about the YAML config payload, not value objects, so
+   there is no conflict.
+   *Recommend:* `@dataclass` for `Tool` and `Message`; plain class for `Context`
+   (stateful with behaviour — what Ruby also made a plain class).
+
+2. **Render `parameters.keys` as `[:direction]` (Ruby symbols) or `['direction']`
+   (Python)?** Byte-for-byte diffing needs the Ruby form.
+   *Recommend:* match verbatim — emit `[:key, ...]` from `Tool.__str__`.
+
+3. **Delete `PROMPTS_DIR` + `prompts/`, mirroring Ruby?** Keeping them would be
+   dead code diverging from Ruby; the example resolves the prompt via the user
+   override.
+   *Recommend:* delete both, matching Ruby.
+
+4. **Adapt the copied `README.md` (vs leave the step-00 one)?** Consistent with
+   the step-00 answer ("reusable baseline agent"), adapt it — short, pointing at
+   the Ruby 01 README for the spec.
+   *Recommend:* adapt, keep it short.

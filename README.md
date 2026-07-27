@@ -11,3 +11,4 @@ Bootcamp learning log under [`docs/technical_journal/`](docs/technical_journal/)
   - [22-07-2026](docs/technical_journal/22-07-2026.md) — Architecture 3b (programmatic `AgentDefinition`), Architecture 4 (n8n, blocked on API credits).
 - [Week 1 summary](docs/technical_journal/week1.md) — plan: build the Baseline Agent (no SDK) in Ruby, then port.
   - [24-07-2026](docs/technical_journal/24-07-2026.md) — Step 0 (Configuration): missing `dotenv` gem, `settings.yaml` filename/location fix.
+  - [27-07-2026](docs/technical_journal/27-07-2026.md) — Step 1 (Struct Skeleton): Ruby → Python port of the `Tool`/`Message`/`Context` data containers.
