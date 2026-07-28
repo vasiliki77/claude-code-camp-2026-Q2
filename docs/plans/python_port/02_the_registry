@@ -1,0 +1,300 @@
+# Port Plan — Step 02: The Tool Registry (Ruby → Python)
+
+Port `Boukensha::Registry` and `Boukensha::UnknownToolError` from the Ruby
+baseline into the Python step folder, and rewrite the example to register tools
+*through the registry* and dispatch them by name — so
+`python/02_the_registry/` prints the same output as `ruby/02_the_registry`.
+
+This is the third of thirteen steps (`00_config` → `12_context`). Step 02 is
+substantively step 01 **plus a registry, an error class, and a rewritten
+example**. No existing data structure changes behaviour.
+
+---
+
+## Starting state (already done — do not redo)
+
+`week1_baseline/python/02_the_registry/` **already exists** as a byte-for-byte
+copy of `python/01_struct_skeleton/` (verified: `diff -rq` between the two
+folders is empty, including the step-01 `README.md` and `examples/example.py`).
+The snapshot copy is done. This plan is therefore **not** "port step 02 from
+scratch" — it is the exact set of edits and additions that turn the copied-01
+folder into the real step 02.
+
+The repo-root `.venv/` already exists and already has this step's deps
+(`requirements.txt` is unchanged from 01 and 00), so there is no environment
+setup.
+
+`week1_baseline/bin/ruby/02_the_registry` already exists (untracked) and runs.
+`bin/python/02_the_registry` does **not** exist yet — see the work list.
+
+---
+
+## Decisions (carried over — settled, do not re-litigate)
+
+- **One shared `.venv/` at the repo root**, reused by every Python step. `pip` +
+  `requirements.txt`, no `uv`/`poetry`/`pyproject.toml`.
+- **Self-contained snapshot per step** — duplication across step folders is
+  intentional and enables diffing step *N* against *N+1*.
+- **`__str__` / `__repr__` matched to Ruby verbatim** — stdout diffing is the
+  primary verification tool.
+- **`@dataclass` for value objects** (`Tool`, `Message`), **plain class for
+  things with behaviour** (`Context` — and now `Registry`).
+- **Missing `settings.yaml` raises `FileNotFoundError`** (Python's deliberate
+  divergence from Ruby's silent `{}`). Already in `config.py`; leave it.
+- **Shared repo-root `.boukensha/`**, **no test framework** (the example is the
+  smoke test), **`PyYAML` accepted** as a standard-library-first exception.
+
+---
+
+## What Ruby changed between step 01 and step 02
+
+Confirmed by diffing `ruby/01_struct_skeleton` against `ruby/02_the_registry`:
+
+| Change | Ruby |
+|---|---|
+| **New** `lib/boukensha/errors.rb` | `class UnknownToolError < StandardError; end` |
+| **New** `lib/boukensha/registry.rb` | `class Registry` — wraps a `Context`; methods `tool(name, description:, parameters: {}, &block)` and `dispatch(name, args = {})` |
+| `lib/boukensha.rb` | Adds two `require_relative` lines for the new files |
+| `examples/example.rb` | Rewritten: builds a `Registry` over the `Context`, registers **two** tools through it, dispatches both, and rescues `UnknownToolError` on a third |
+| `README.md` | Rewritten for the registry |
+
+`config.rb`, `tool.rb`, `message.rb`, `context.rb`, `tasks/base.rb`,
+`tasks/player.rb`, `Gemfile` are byte-identical between the two Ruby steps — the
+matching Python files in the copied folder are already correct and need no
+touching.
+
+> ⚠️ **Do not port the uncommitted Ruby `example.rb` fix.** Ruby's working tree
+> changes `BOUKENSHA_DIR` from `../../../.boukensha` to `../../../../.boukensha`
+> — that was a Ruby-side depth bug. The Python example already uses
+> `parents[4]`, which is the correct repo root. Leave it alone.
+
+---
+
+## Read before writing
+
+| Ruby source (read this) | Purpose |
+|---|---|
+| `week1_baseline/ruby/02_the_registry/lib/boukensha/registry.rb` | **`Registry`** — the whole step |
+| `week1_baseline/ruby/02_the_registry/lib/boukensha/errors.rb` | **`UnknownToolError`** |
+| `week1_baseline/ruby/02_the_registry/lib/boukensha.rb` | Updated public surface (two new requires) |
+| `week1_baseline/ruby/02_the_registry/examples/example.rb` | The smoke test whose output must be reproduced |
+
+Supporting context (read for intent, do not port):
+
+| File | Why |
+|---|---|
+| `week1_baseline/ruby/02_the_registry/README.md` | The "agent never calls a tool directly" framing and the `dispatch` symbol-key gotcha |
+| `week1_baseline/ruby/ITERATIONS.md` §"2 The Registry" | Step intent |
+| `week1_baseline/python/01_struct_skeleton/examples/example.py` | Python idioms already established — reuse the preamble verbatim |
+
+> ⚠️ The Ruby README's **"Expected Output"** block is **stale** — it shows
+> `#<Context turns=0 tools=2 budget=8192>` and omits the `Config:` line, neither
+> of which the code actually produces. Use the captured output under
+> **Verification** below, not the README block.
+
+Live config consumed (do not modify): the repo-root `.boukensha/` — same
+`.env`, `settings.yaml`, and `prompts/player/system.md` as steps 00 and 01.
+
+---
+
+## The work — a checklist over the existing folder
+
+### ➕ Add — two new modules under `boukensha/`
+
+**`boukensha/errors.py`** ← `lib/boukensha/errors.rb`. One line of substance:
+
+```python
+class UnknownToolError(Exception):
+    """Raised when dispatch is called with a name that has no registered tool."""
+```
+
+Ruby subclasses `StandardError`; the Python analogue is `Exception` (**not**
+`BaseException`, which would dodge normal `except` handling).
+
+**`boukensha/registry.py`** ← `lib/boukensha/registry.rb`. A plain stateful
+class holding a reference to the `Context`:
+
+| Ruby | Python |
+|---|---|
+| `def initialize(context)` | `def __init__(self, context): self.context = context` |
+| `def tool(name, description:, parameters: {}, &block)` | `def tool(self, name, *, description, parameters=None)` — keyword-only `description`/`parameters`, mirroring Ruby's required/optional keywords |
+| `parameters: {}` default | `parameters=None` then `parameters or {}` — **never a mutable `{}` default** |
+| `Tool.new(name.to_s, description, parameters, block)` | `Tool(str(name), description, parameters, block)` |
+| `@context.register_tool(tool)` then `tool` | same — registers on the context and returns the `Tool` |
+| `def dispatch(name, args = {})` | `def dispatch(self, name, args=None)` — same mutable-default rule |
+| `@context.tools[name.to_s]` | `self.context.tools.get(str(name))` |
+| `raise UnknownToolError, "No tool registered as '#{name}'" unless tool` | `raise UnknownToolError(f"No tool registered as '{name}'")` if falsy — **message string must match byte-for-byte**, single quotes around the name included |
+| `tool.block.call(**args.transform_keys(&:to_sym))` | `tool.block(**args)` |
+
+> **The symbol-key gotcha does not exist in Python.** Ruby needs
+> `transform_keys(&:to_sym)` because the API hands back string-keyed JSON while
+> Ruby blocks take symbol keywords. Python keyword arguments *are* strings, so
+> `tool.block(**args)` works directly on the API's dict. Do not invent a
+> translation step to "match" Ruby — the Ruby README calls this out as a
+> learning point, and the honest port is that the problem vanishes. Say so in
+> the Python README (see below).
+
+### ➕ Add — the launcher
+
+**`week1_baseline/bin/python/02_the_registry`** — copy of
+`bin/python/01_struct_skeleton` with both `01_struct_skeleton` path segments
+changed to `02_the_registry`; `chmod +x` it.
+
+### ✏️ Edit — two existing files
+
+**`boukensha/__init__.py`** — add the two exports (mirroring the two new
+`require_relative` lines in `boukensha.rb`):
+
+```python
+from .config import Config
+from .tasks import Base, Player
+from .tool import Tool
+from .message import Message
+from .context import Context
+from .errors import UnknownToolError
+from .registry import Registry
+
+__all__ = [
+    "Config", "Base", "Player", "Tool", "Message", "Context",
+    "UnknownToolError", "Registry",
+]
+```
+
+**`examples/example.py`** — rewrite the body to the step-02 example. Keep the
+step-01 preamble **unchanged** (the `sys.path.insert(...)` and the
+`os.environ.setdefault("BOUKENSHA_DIR", ... parents[4] / ".boukensha")` — still
+4 levels up, same tree depth). The import line changes: the example no longer
+constructs a `Tool` itself, so it imports
+`Config, Context, Player, Registry, UnknownToolError`.
+
+| Ruby (02 example) | Python |
+|---|---|
+| `ctx = Context.new(task: ..., system: ...)` | unchanged from step 01 |
+| `registry = Boukensha::Registry.new(ctx)` | `registry = Registry(ctx)` |
+| `registry.tool("move", description:, parameters:) do |direction:| ... end` | See **OQ 1** — decorator form recommended |
+| `parameters: { direction: { type: "string" } }` | `{"direction": {"type": "string"}}` — symbol keys become string keys; `Tool.__str__` already re-adds the `:` prefix, so output still reads `params=[:direction]` |
+| `message.upcase` | `message.upper()` |
+| `ctx.tools.each_value { |t| puts "  #{t}" }` | `for t in ctx.tools.values(): print(f"  {t}")` — insertion order (`move`, then `shout`) is guaranteed in both languages |
+| `registry.dispatch("shout", { "message" => "dragon spotted" })` | `registry.dispatch("shout", {"message": "dragon spotted"})` |
+| `begin ... rescue Boukensha::UnknownToolError => e ... end` | `try: registry.dispatch("flee")` / `except UnknownToolError as e: print(f"UnknownToolError caught: {e}")` |
+
+Keep the **two explanatory comment blocks** from the Ruby example (the "we now
+register through the registry" note above the tool definitions, and the
+"mimicking what the agent would do" note above the dispatches) — they are the
+teaching content of this step.
+
+Match the print layout exactly — note the header and label widths **changed**
+from step 01: it is now `=== BOUKENSHA Step 2: Tool Registry ===` (uppercase
+BOUKENSHA) with single-space-padded `Config:  ` / `Context: ` labels, not step
+01's `Config:   ` / `Context:  `.
+
+**`README.md`** — adapt the copied step-01 README to step 02: retitle to
+`02 · The Tool Registry (Python)`, point at the Ruby 02 README for the spec,
+update the venv/run paths to `02_the_registry`, replace the expected-output
+block with the real one below, and document the Python-specific calls:
+
+- the block → callable translation chosen in OQ 1,
+- **that Ruby's `transform_keys(&:to_sym)` step has no Python equivalent**,
+  because kwargs are already strings — this directly contradicts the Ruby
+  README's "Considerations" section, so call it out rather than leaving a
+  reader to reconcile the two,
+- `Exception` as the analogue of `StandardError`.
+
+Keep it short, same as step 01.
+
+### ✅ Leave untouched (copied correctly from 01)
+
+`boukensha/config.py`, `boukensha/tool.py`, `boukensha/message.py`,
+`boukensha/context.py`, `boukensha/tasks/*`, `requirements.txt` — all identical
+between Ruby steps 01 and 02, so the copies are already right.
+
+`message.py` stays even though the step-02 example never adds a message
+(`turns=0`) — Ruby keeps `message.rb` too.
+
+---
+
+## Verification
+
+Done when all pass:
+
+1. `./week1_baseline/bin/ruby/02_the_registry` still runs unchanged.
+2. `./week1_baseline/bin/python/02_the_registry` prints exactly (captured from
+   the real Ruby run, not from the stale README):
+   ```
+   === BOUKENSHA Step 2: Tool Registry ===
+
+   Config:  #<Boukensha::Config dir=<repo>/.boukensha tasks=player>
+   Context: #<Context task=player turns=0 tools=2>
+   Tools:
+     #<Tool name=move description=Move the player in a direction (north, so params=[:direction]>
+     #<Tool name=shout description=Shout a message so everyone in the zone c params=[:message]>
+
+   Dispatching 'shout' with message='dragon spotted'...
+   Result: DRAGON SPOTTED
+
+   Dispatching 'move' with direction='north'...
+   Result: You move north into a torch-lit corridor.
+
+   UnknownToolError caught: No tool registered as 'flee'
+   ```
+3. A literal diff of the two programs' stdout is **empty**:
+   ```sh
+   diff <(./week1_baseline/bin/ruby/02_the_registry) \
+        <(./week1_baseline/bin/python/02_the_registry)
+   ```
+   This is the real gate. It catches the header casing, the label padding, the
+   tool ordering, and the exact `UnknownToolError` message text at once.
+4. The unknown-tool path is genuinely *caught*, not merely printed — the
+   program must exit `0`, so `echo $?` after the Python run is `0`.
+5. `grep -rn "transform_keys\|to_sym" week1_baseline/python/02_the_registry` is
+   empty (no cargo-culted symbol translation).
+
+---
+
+## Open Questions
+
+New to step 02; each lists a recommended default. (Everything under
+**Decisions** is settled — do not resurface it.)
+
+1. **How should a Ruby block become a Python callable in `registry.tool`?**
+   Ruby's `&block` with keyword params (`do |direction:|`) has no direct Python
+   syntax. Three candidates:
+
+   a. **Decorator** — `tool()` returns a decorator that registers the function:
+   ```python
+   @registry.tool("move",
+       description="Move the player in a direction (north, south, east, west, up, down)",
+       parameters={"direction": {"type": "string"}})
+   def move(direction):
+       return f"You move {direction} into a torch-lit corridor."
+   ```
+   b. **Callable keyword** — `registry.tool("move", description=..., parameters=..., block=lambda direction: ...)`.
+   c. **Positional callable** — `registry.tool("move", fn, description=..., ...)`.
+
+   (a) reads closest to the Ruby block, keeps multi-line bodies natural, and is
+   how real Python agent SDKs register tools; the trade-off is that `tool()`
+   then returns a decorator rather than the `Tool` (have the decorator return
+   the undecorated function so the name stays callable — the example ignores the
+   return value either way, so no output differs).
+   *Recommend:* (a) the decorator.
+    - My instructor also implemented "a"
+2. **Should `Registry` hold the `Context` as `self.context` (public) or
+   `self._context` (private)?** Ruby uses `@context` with no `attr_reader`, so
+   it is effectively private, but Python's convention is that a leading
+   underscore is a strong signal and later steps may well want the context back
+   out of the registry.
+   *Recommend:* public `self.context` — Python has no real privacy, and later
+   steps (`03_the_loop` onward) are likely to read it.
+
+3. **Should `dispatch` validate that `args` keys match `parameters`?** Ruby does
+   not — a wrong key raises a bare `ArgumentError` from the block. Adding
+   validation would be a behaviour divergence with no output change *in this
+   example* but a different failure mode.
+   *Recommend:* no validation — match Ruby, keep the step small.
+
+4. **Fix the stale "Expected Output" block in the Ruby README while we're
+   here?** It shows `budget=8192` and omits the `Config:` line, so it does not
+   match what Ruby prints. Out of scope for a Python port, but it is the
+   document a reader would trust.
+   *Recommend:* leave it to the user's call — flag it, do not silently edit
+   Ruby as part of this port.

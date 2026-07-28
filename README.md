@@ -12,3 +12,4 @@ Bootcamp learning log under [`docs/technical_journal/`](docs/technical_journal/)
 - [Week 1 summary](docs/technical_journal/week1.md) — plan: build the Baseline Agent (no SDK) in Ruby, then port.
   - [24-07-2026](docs/technical_journal/24-07-2026.md) — Step 0 (Configuration): missing `dotenv` gem, `settings.yaml` filename/location fix.
   - [27-07-2026](docs/technical_journal/27-07-2026.md) — Step 1 (Struct Skeleton): Ruby → Python port of the `Tool`/`Message`/`Context` data containers.
+  - [28-07-2026](docs/technical_journal/28-07-2026.md) — Step 2 (The Tool Registry): Ruby → Python port of `Registry`/`UnknownToolError`, block → decorator, stale Ruby README output.

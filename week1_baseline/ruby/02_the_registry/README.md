@@ -25,7 +25,7 @@ Registry: "looking up "move" in the tool table"
 Registry: "Found it now calling the block with the provided args"
 Registry: "Here's the result"
 Agent: "Thanks buddy"
-Registry: "Thats why you pay me the big tokes"
+Registry: "Thats why you pay me the big tokens"
 ```
 
 ## Boukensha::Registry
