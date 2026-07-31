@@ -13,3 +13,4 @@ Bootcamp learning log under [`docs/technical_journal/`](docs/technical_journal/)
   - [24-07-2026](docs/technical_journal/24-07-2026.md) — Step 0 (Configuration): missing `dotenv` gem, `settings.yaml` filename/location fix.
   - [27-07-2026](docs/technical_journal/27-07-2026.md) — Step 1 (Struct Skeleton): Ruby → Python port of the `Tool`/`Message`/`Context` data containers.
   - [28-07-2026](docs/technical_journal/28-07-2026.md) — Step 2 (The Tool Registry): Ruby → Python port of `Registry`/`UnknownToolError`, block → decorator, stale Ruby README output.
+  - [31-07-2026](docs/technical_journal/31-07-2026.md) — Steps 3–5 (Prompt Builder, API Client, Agent Loop): five backends, the stdout gate breaking on live API calls, two upstream Ruby bugs, and a port skill abandoned as too costly.

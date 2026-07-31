@@ -1,0 +1,373 @@
+# Port Plan — Step 05: The Agent Loop (Ruby → Python)
+
+Port `Boukensha::Agent` — the loop that finally makes the agent *act* — into the
+Python step folder, along with the supporting changes that made it possible: a
+`parse_response` normalizer on every backend, an `assistant_message` inverse on
+three of them, a `tools:` override threaded through `Client` and
+`PromptBuilder`, and `max_iterations` / `max_output_tokens` task settings.
+
+This is the sixth of thirteen steps (`00_config` → `12_context`).
+
+> **The delta is much larger than "an `agent.rb` file being added."** `agent.rb`
+> is new, but **all five backends** changed, and so did `client.rb`,
+> `prompt_builder.rb`, `tasks/base.rb`, `errors.rb`, and `boukensha.rb`. The
+> backend changes are not incidental — the loop only stays simple because every
+> provider now normalizes its response into one shape. Budget for that.
+
+---
+
+## Starting state (already done — do not redo)
+
+`week1_baseline/python/05_agent_loop/` **already exists** as a byte-for-byte
+copy of `python/04_api_client/` (verified: `diff -rq` excluding `__pycache__` is
+empty). You made this copy.
+
+The repo-root `.venv/` needs no new packages — the agent is pure stdlib.
+`requirements.txt` is unchanged from 00–04.
+
+`week1_baseline/bin/ruby/05_agent_loop` exists and runs.
+`bin/python/05_agent_loop` does **not** exist yet.
+
+`.boukensha/settings.yaml` does **not** set `max_iterations` or
+`max_output_tokens`, so both fall back to the new defaults in `Tasks::Base`
+(25 and 1024). The example prints both, so they are output-visible.
+
+---
+
+## Decisions (carried over — settled, do not re-litigate)
+
+- **One shared `.venv/` at the repo root**; `pip` + `requirements.txt`.
+- **Self-contained snapshot per step** — duplication is intentional.
+- **`__str__` / `__repr__` matched to Ruby verbatim.**
+- **`@dataclass` for value objects**, plain classes for things with behaviour.
+- **Tools registered with the `@registry.tool(...)` decorator.**
+- **Backends reached as `backends.Anthropic`** via the subpackage.
+- **`PromptBuilder.url()` / `.headers()` are methods, not properties.**
+- **`urllib.request`, never `requests`** — the stdlib-only stance is the point.
+- **Python's `PROMPTS_DIR` stays correct** (`parents[1]`), diverging from Ruby's
+  broken `../../../prompts`. Settled in step 04; step 05's `config.rb` does not
+  revisit it.
+- **No test framework** — the example is the smoke test; scratch verification
+  lives in the scratchpad.
+- **Mirror Ruby's bugs and document them; never edit the Ruby side.**
+
+---
+
+## What Ruby changed between step 04 and step 05
+
+Confirmed by `diff -ru ruby/04_api_client ruby/05_agent_loop --exclude=Gemfile.lock`:
+
+| Change | Ruby |
+|---|---|
+| **New** `lib/boukensha/agent.rb` | `Agent` — the loop, iteration ceiling, wind-down |
+| `lib/boukensha/backends/anthropic.rb` | `+parse_response`; `to_payload` takes `tools:` |
+| `lib/boukensha/backends/openai.rb` | `+parse_response`, `+assistant_message`, `+require "json"`; `to_messages` handles `:assistant`; `to_payload` takes `tools:` |
+| `lib/boukensha/backends/gemini.rb` | `+parse_response`, `+assistant_parts`; same shape |
+| `lib/boukensha/backends/ollama.rb` | `+parse_response`, `+assistant_message`; same shape |
+| `lib/boukensha/backends/ollama_cloud.rb` | identical to `ollama.rb`'s changes |
+| `lib/boukensha/client.rb` | `call` takes `tools:` and forwards it |
+| `lib/boukensha/prompt_builder.rb` | `to_api_payload` takes `tools:`; `+parse_response` delegator |
+| `lib/boukensha/tasks/base.rb` | `+DEFAULT_MAX_ITERATIONS`, `+DEFAULT_MAX_OUTPUT_TOKENS`, `+max_iterations`, `+max_output_tokens`, `+integer_setting` |
+| `lib/boukensha/errors.rb` | `+LoopError` |
+| `lib/boukensha.rb` | `+require agent` |
+| `lib/boukensha/config.rb` | **Style only** — four `mud_*` readers rewritten as endless methods |
+| `examples/example.rb` | Rewritten around `Agent`; tools now sandboxed to `base_dir` |
+| `README.md` | Rewritten for the loop |
+
+`tool.rb`, `message.rb`, `context.rb`, `registry.rb`, `backends/base.rb`,
+`tasks/player.rb`, `prompts/system.md`, and `Gemfile` are byte-identical.
+
+> ⚠️ **`config.rb` needs no Python change.** The diff looks real but is purely
+> Ruby 3 endless-method sugar (`def mud_host = dig(:mud, :host) || "localhost"`
+> replacing the four-line form). Identical behaviour, and Python already has
+> these as properties. Do not touch `config.py`.
+
+> ⚠️ **`LoopError` is declared and never used.** Nothing in `agent.rb` — or
+> anywhere else in step 05 — raises or rescues it; the loop winds down via
+> `wrap_up` instead of raising. The README calls it "for runaway agents", which
+> describes an intention rather than the code. See **OQ 2**.
+
+> ⚠️ **The Ruby step-05 README is stale, again.** Its "New Files" table lists
+> `backends/base.rb`, `tasks/base.rb`, `tasks/player.rb`, `backends/openai.rb`,
+> `backends/gemini.rb`, `backends/ollama_cloud.rb`, and `prompts/system.md` as
+> new — every one of those arrived in step 03. Its "Updated Files" table claims
+> `context.rb` changed; it did not. Its "What the Loop Looks Like" block shows
+> `[iteration 1]` where the code prints `[iteration 1/25]`, and renders args as
+> `{:path=>"."}` — a symbol-keyed, pre-3.4 Ruby format, whereas this Ruby (3.4.1)
+> actually prints `{"path" => "."}`. **Take no output from it.** Its prose
+> sections on the normalized shape and on tool-call IDs are accurate and worth
+> reading.
+
+---
+
+## Read before writing
+
+| Ruby source (read this) | Purpose |
+|---|---|
+| `ruby/05_agent_loop/lib/boukensha/agent.rb` | **`Agent`** — the whole step |
+| `ruby/05_agent_loop/lib/boukensha/backends/anthropic.rb` | `parse_response` for the backend the example runs |
+| `ruby/05_agent_loop/lib/boukensha/backends/{openai,gemini,ollama,ollama_cloud}.rb` | `parse_response` + the `assistant_message` / `assistant_parts` inverse |
+| `ruby/05_agent_loop/lib/boukensha/{client,prompt_builder}.rb` | The `tools:` passthrough |
+| `ruby/05_agent_loop/lib/boukensha/tasks/base.rb` | The two new settings readers |
+| `ruby/05_agent_loop/examples/example.rb` | The example to reproduce |
+
+Supporting context (read for intent, do not port):
+
+| File | Why |
+|---|---|
+| `ruby/05_agent_loop/README.md` | "Every Backend Speaks the Same Normalized Shape" and the tool-call-ID note explain *why* the backends changed. Ignore its file tables and output block |
+
+Live config consumed (do not modify): repo-root `.boukensha/` — no
+`max_iterations` / `max_output_tokens` keys, so the defaults apply.
+
+---
+
+## The work — a checklist over the existing folder
+
+### ➕ Add — `boukensha/agent.py`
+
+Class constants, mirroring Ruby:
+
+| Ruby | Python |
+|---|---|
+| `MAX_ITERATIONS = 25` | same (note this duplicates `Tasks::Base::DEFAULT_MAX_ITERATIONS`; Ruby carries both, so carry both) |
+| `WRAP_UP_OUTPUT_TOKENS = 400` | same |
+| `WRAP_UP_DIRECTIVE = <<~MSG.strip` | a triple-quoted string, `.strip()`-equivalent content. The squiggly heredoc strips leading indentation, so the stored value is three lines with **no** leading spaces and no trailing newline — reproduce that exactly, since it is sent to the model |
+
+Constructor and methods:
+
+| Ruby | Python |
+|---|---|
+| `initialize(context:, registry:, builder:, client:, task_settings: nil, max_iterations: nil, max_output_tokens: nil)` | `def __init__(self, *, context, registry, builder, client, task_settings=None, max_iterations=None, max_output_tokens=None)` |
+| `@iteration = 0` | `self.iteration = 0` |
+| `explicit.to_i unless explicit.nil?` | `int(explicit) if explicit is not None` |
+| `@context.task.respond_to?(:max_iterations)` | `hasattr(self.context.task, "max_iterations")` |
+| `@max_iterations.positive? && @iteration >= @max_iterations` | `self.max_iterations > 0 and self.iteration >= self.max_iterations` |
+| `content.select { \|b\| b["type"] == "text" }.map { \|b\| b["text"] }.join` | `"".join(b["text"] for b in content if b["type"] == "text")` |
+| `text.strip.empty?` | `not text.strip()` |
+| `rescue ApiError` | `except ApiError:` |
+| `result.to_s[0..60]` | `str(result)[:61]` — **inclusive range → 61** |
+| `puts "[iteration #{@iteration}/#{@max_iterations}]"` | `print(f"[iteration {self.iteration}/{self.max_iterations}]")` |
+
+> ⚠️ **Two truthiness traps, and the second one silently breaks the wind-down.**
+>
+> `call_opts` is `@max_output_tokens ? { max_output_tokens: … } : {}`. In Ruby
+> `0` is truthy, so an explicit `max_output_tokens: 0` is forwarded. Written as
+> `if self.max_output_tokens:` in Python, zero would be dropped. Use
+> `is not None`.
+>
+> The worse one is in the backends (below): `tools.nil? ? to_tools(…) : tools`.
+> `wrap_up` deliberately calls `client.call(tools: [], …)` — an **empty list** —
+> to disable tools for the final message. Ported as `tools or self.to_tools(…)`,
+> the empty list is falsy, the full tool set comes back, and the model can keep
+> calling tools during the very call meant to stop it. The iteration ceiling
+> then does nothing. It must be `to_tools(…) if tools is None else tools`.
+
+`wrap_up` runs **outside** the counted loop: it does not increment `iteration`
+and never re-checks the limit, so it cannot re-trigger itself. Preserve that.
+
+### ✏️ Edit — all five backends
+
+Each gains `tools=None` on `to_payload`, using the `is None` test above, and a
+`parse_response` that normalizes to:
+
+```python
+{"stop_reason": "tool_use" | "end_turn",
+ "content": [{"type": "text", "text": …},
+             {"type": "tool_use", "id": …, "name": …, "input": {…}}]}
+```
+
+Note the **mixed key convention**, which Ruby has and Python must match on the
+wire: the outer dict uses symbol-ish keys (`stop_reason`, `content` — plain
+strings in Python) while the inner blocks use string keys. In Python both are
+strings, so the distinction disappears — one less thing to think about, but do
+not "tidy" the inner blocks into anything else, because `Agent` and
+`assistant_message` both index them by `"type"`, `"text"`, `"id"`, `"name"`,
+`"input"`.
+
+Per backend:
+
+| Backend | `parse_response` reads | Notes |
+|---|---|---|
+| Anthropic | `response["stop_reason"]`, `response["content"]` | `stop_reason` is normalized to exactly `"tool_use"` or `"end_turn"` — anything else collapses to `"end_turn"`. **No `assistant_message` needed**: Anthropic's `content` array *is* the normalized shape, which is why its `to_messages` passes assistant content through untouched |
+| OpenAI | `response["choices"][0]["message"]`, `.tool_calls` | `input` comes from `json.loads(tc["function"]["arguments"] or "{}")` — the arguments arrive as a **JSON string**, not an object. Ruby added `require "json"` for exactly this |
+| Gemini | `response["candidates"][0]["content"]["parts"]` | Splits `functionCall` parts from `text` parts. **Reuses the function name as the id** — Gemini assigns none |
+| Ollama / OllamaCloud | `response["message"]["tool_calls"]` | Same name-as-id trick. Note the text block is added only when `message["content"]` is present **and non-empty** — Ollama returns `""` rather than omitting it |
+
+Ruby's `response.dig("choices", 0, "message") || {}` is a safe nested lookup;
+Python needs an explicit guarded walk (a small `_dig` helper, or chained
+`.get(...) or {}` / index guards). Do not use bare `[...]` chains — a missing
+key would raise instead of yielding the empty-response behaviour Ruby has.
+
+OpenAI, Gemini, Ollama, and OllamaCloud also gain the **inverse**
+(`assistant_message` / `assistant_parts`), used by `to_messages` when replaying
+an `assistant` turn from history:
+
+| Ruby | Python |
+|---|---|
+| `content.is_a?(String) ? [{"type" => "text", "text" => content}] : content` | `[{"type": "text", "text": content}] if isinstance(content, str) else content` |
+| `text_blocks.map { \|b\| b["text"] }.join` | `"".join(b["text"] for b in text_blocks)` |
+| `b["input"].to_json` (OpenAI only) | `json.dumps(b["input"])` — OpenAI wants arguments as a string; Ollama and Gemini pass the object through |
+
+### ✏️ Edit — `boukensha/prompt_builder.py`
+
+Add `tools=None` to `to_api_payload` and forward it; add a `parse_response`
+delegator. Leave the step-03 `to_messages` arity mismatch alone — still
+unchanged in Ruby 05.
+
+### ✏️ Edit — `boukensha/client.py`
+
+`call` gains `tools=None`, forwarded to `to_api_payload`. Nothing else about the
+retry machinery changes.
+
+### ✏️ Edit — `boukensha/tasks/base.py`
+
+Add `DEFAULT_MAX_ITERATIONS = 25`, `DEFAULT_MAX_OUTPUT_TOKENS = 1024`, the two
+classmethod readers, and a private `_integer_setting(settings, key, default)`
+returning `default` when the value is `None`, else `int(value)`.
+
+Ruby's `Integer(value)` is stricter than Python's `int(value)` — it rejects
+`"08"` (ambiguous octal) and any trailing garbage. `int("08")` returns `8`. See
+**OQ 3**; the difference is unreachable from the current `settings.yaml`.
+
+### ✏️ Edit — `boukensha/errors.py`
+
+Add `LoopError` in Ruby's declaration position (after `ApiError`, before
+`UnsupportedModelError`) — see **OQ 2**.
+
+### ✏️ Edit — `boukensha/__init__.py`
+
+Export `Agent` (import last, matching the Ruby require order) and `LoopError`.
+
+### ✏️ Edit — `examples/example.py`
+
+Restructured this step:
+
+| Ruby (05 example) | Python |
+|---|---|
+| `base_dir = File.expand_path("..", __dir__)` | `base_dir = Path(__file__).resolve().parents[1]` — the step root |
+| `File.read(File.expand_path(path, base_dir))` | `(base_dir / path).resolve().read_text()` — tools are now sandboxed to the step folder rather than the process CWD |
+| `Dir.entries(...).reject { … }.join(", ")` | `", ".join(...)` — **note the separator changed from `"\n"` in step 04** |
+| tools registered **after** the agent is built | keep that order; the registry is shared by reference so it makes no behavioural difference, but staying literal keeps the diff readable |
+| `ctx.add_message(:user, "Read the README.md file and summarise …")` | same string, verbatim |
+| `Agent.new(context:, registry:, builder:, client:, task_settings: player_settings)` | `Agent(context=ctx, registry=registry, builder=builder, client=client, task_settings=player_settings)` |
+| `puts "Max iterations: #{Tasks::Player.max_iterations(player_settings)}"` | same, and likewise `Max output tokens:` |
+| `result = agent.run` then `=== FINAL RESPONSE ===` | `result = agent.run()` |
+
+The step-04 lines `Sending request to …` and `Raw response:` are **gone**, and
+`require "json"` was dropped in Ruby — but Python still needs `import json` if
+anything else in the file uses it. It no longer does, so drop the import too.
+
+### ➕ Add — the launcher
+
+`week1_baseline/bin/python/05_agent_loop` — copy of `bin/python/04_api_client`
+with both path segments changed; `chmod +x`.
+
+### ✏️ Edit — `README.md`
+
+Adapt to step 05, documenting: the two `is None` traps (especially the
+`tools=[]` one and what breaks if you get it wrong), the mixed-key normalized
+shape, why Anthropic needs no `assistant_message`, the name-as-id convention for
+Gemini/Ollama, OpenAI's arguments-as-JSON-string asymmetry, the `_dig` guard
+replacing Ruby's `dig`, and whatever OQ 1–3 land on. Record the verification
+approach — the stdout gate is even weaker here than in step 04.
+
+### ✅ Leave untouched
+
+`config.py` (Ruby's change was style-only), `context.py`, `message.py`,
+`tool.py`, `registry.py`, `backends/base.py`, `tasks/player.py`,
+`prompts/system.md`, `requirements.txt`.
+
+---
+
+## Verification
+
+Weaker than step 04, and for a new reason: the example now makes **several**
+billable calls per run, and the model decides how many tools to call and in what
+order. Two correct implementations will differ in iteration count, tool
+sequence, and final text. Lean on offline checks and treat the live run as a
+smoke test.
+
+1. **Deterministic-prefix diff — first 9 lines**, which now includes the first
+   iteration banner:
+   ```sh
+   diff <(./week1_baseline/bin/ruby/05_agent_loop | head -9) \
+        <(./week1_baseline/bin/python/05_agent_loop | head -9)
+   ```
+   Expected:
+   ```
+   === BOUKENSHA Step 5: Agent Loop ===
+
+   Config: #<Boukensha::Config dir=<repo>/.boukensha tasks=player>
+   Provider: anthropic
+   Model: claude-haiku-4-5
+   Max iterations: 25
+   Max output tokens: 1024
+
+   [iteration 1/25]
+   ```
+
+2. **Cross-language backend normalization — the real gate, and free.** Feed one
+   canned raw response per provider (Anthropic `tool_use` + `end_turn`, OpenAI
+   `tool_calls`, Gemini `functionCall`, Ollama `tool_calls`) into both
+   implementations' `parse_response`, and the normalized blocks back through
+   `assistant_message` / `assistant_parts`, then diff the JSON. This is the
+   step-03 five-backend dump repeated for the new methods, and it covers the
+   four providers the example never touches. Scratchpad, both languages, `diff`.
+
+3. **Offline loop behaviour** with a stub client replaying a fixed script — no
+   network, fully deterministic. Assert:
+   - `tool_use` → dispatch → `tool_result` appended → next call → `end_turn`
+     returns the joined text;
+   - two `tool_use` blocks in one response dispatch both before the next call;
+   - the assistant message is appended **before** its tool results (the Ruby
+     README flags this as an API requirement);
+   - hitting `max_iterations` triggers exactly one `wrap_up` call, made with
+     `tools=[]` and `max_output_tokens=400`, and does **not** increment the
+     counter;
+   - `wrap_up` raising `ApiError` returns the fallback message;
+   - `wrap_up` returning whitespace returns the fallback message;
+   - `max_output_tokens=0` is still forwarded (the truthiness trap).
+
+4. **Live smoke test, once.** Run both, confirm exit `0`, an `=== FINAL
+   RESPONSE ===` section, and at least one `tool call →` line. Do not diff the
+   bodies.
+
+5. `grep -rn "tools or \|if self.max_output_tokens:" week1_baseline/python/05_agent_loop --include='*.py'`
+   is empty — a direct check for the two truthiness traps.
+
+---
+
+## Open Questions
+
+1. **The `tool call → name(args)` line cannot match Ruby byte-for-byte.** Ruby
+   3.4 renders the args hash as `{"path" => "."}`; Python renders `{'path': '.'}`.
+   (The Ruby README shows a third format, `{:path=>"."}`, from an older Ruby —
+   evidence that this rendering is not stable even within Ruby.) Options: accept
+   the divergence, or hand-format the dict to match Ruby's current output.
+   *Recommend:* **accept it and note it in the README.** The line is
+   human-readable progress logging, not data; the surrounding output is already
+   non-deterministic so nothing downstream can diff it; and pinning Python to a
+   particular Ruby version's `Hash#inspect` would be a maintenance trap that has
+   already bitten once. If you would rather they match, a small formatter is
+   about five lines and I will add it.
+
+2. **Port `LoopError` even though nothing uses it?** It is declared in Ruby's
+   `errors.rb` and never raised or rescued anywhere in step 05.
+   *Recommend:* port it. It costs two lines, keeps the error surface aligned for
+   later steps, and omitting it would make the next `errors.py` diff misleading.
+   Document that it is currently unused so nobody hunts for the raise site.
+
+3. **`Integer(value)` vs `int(value)` in `integer_setting`.** Ruby rejects
+   `"08"` and trailing garbage; Python's `int()` accepts `"08"` as `8`. No
+   current settings file exercises either.
+   *Recommend:* plain `int(value)`. Matching Ruby's strictness means a regex or
+   a try/except wrapper for a case that cannot arise from the YAML we ship, and
+   Python's `ValueError` is already a clear failure for genuinely bad input.
+
+4. **Where does the offline loop test live?** Same shape as step 04's question,
+   but this one is more valuable — it is the only real gate on the loop.
+   *Recommend:* scratchpad, run during the port, results recorded in the README.
+   Standing decision is no test framework; if you want these kept permanently,
+   that is a deliberate change worth making on its own rather than smuggling in
+   a `tests/` directory here. Say the word and I will propose it properly.
