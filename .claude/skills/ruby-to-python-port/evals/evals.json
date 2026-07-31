@@ -1,0 +1,19 @@
+{
+  "eval_id": 0,
+  "eval_name": "plan-step-04-api-client",
+  "prompt": "Write a port plan for carrying the Ruby changes in week1_baseline/ruby/04_api_client over to the Python port at week1_baseline/python/04_api_client. The Python folder is already a copy of the previous Python step (03_prompt_builder), so the plan only needs to cover the delta.",
+  "assertions": [
+    {"id": "delta-not-from-scratch", "text": "Establishes a starting state: python/04_api_client is already a copy of python/03_prompt_builder, so the plan covers only the delta rather than a from-scratch port"},
+    {"id": "identifies-all-changed-files", "text": "Identifies every Ruby file that changed between step 03 and 04: new client.rb, plus config.rb, errors.rb, tasks/base.rb, boukensha.rb, prompts/system.md, examples/example.rb, README.md"},
+    {"id": "flags-live-api-breaks-gate", "text": "Explicitly notes the step-04 example makes a real network API call, so the byte-for-byte stdout diff used as the gate in steps 00-03 cannot work, and proposes an alternative verification"},
+    {"id": "http-approach-and-stdlib-rule", "text": "Names a concrete Python HTTP approach (urllib.request or requests) and reckons with the repo's standard-library-first rule"},
+    {"id": "maps-transient-errors", "text": "Maps Ruby's TRANSIENT_ERRORS list (EOFError, Errno::ECONNRESET/ECONNREFUSED, Net::OpenTimeout/ReadTimeout, OpenSSL::SSL::SSLError, SocketError, Timeout::Error) to concrete Python exception classes"},
+    {"id": "preserves-retry-policy", "text": "States the retry policy exactly: MAX_RETRIES 3, BASE_RETRY_DELAY 0.5, delay = 0.5 * 2**(attempt-1), retryable statuses [408,409,429,500,502,503,504]"},
+    {"id": "adds-api-error", "text": "Says to add an ApiError exception class to errors.py"},
+    {"id": "catches-prompt-content-change", "text": "Notes prompts/system.md content was rewritten this step (new Boukensha persona text) and must be copied verbatim"},
+    {"id": "catches-prompts-dir-change", "text": "Notes PROMPTS_DIR changed from ../../prompts to ../../../prompts, and reckons with what that means for Python (ideally noticing it now points outside the step folder at a directory that does not exist)"},
+    {"id": "notes-tasks-base-already-correct", "text": "Notes the tasks/base.rb changes (settings.yml -> settings.yaml message text, and the Hash guard in fetch) are ALREADY present in the Python port, so no Python edit is needed"},
+    {"id": "open-questions-with-recommendations", "text": "Has an Open Questions section where each question carries an explicit recommendation"},
+    {"id": "left-repo-untouched", "text": "The run modified no files under week1_baseline/ or docs/ (verified with git status)"}
+  ]
+}

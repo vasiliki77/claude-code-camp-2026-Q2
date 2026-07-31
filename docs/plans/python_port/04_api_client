@@ -1,0 +1,397 @@
+# Port Plan — Step 04: The API Client (Ruby → Python)
+
+Port `Boukensha::Client` — the one HTTP POST that finally sends the payload
+step 03 assembled — plus `ApiError`, from the Ruby baseline into the Python step
+folder, and rewrite the example so `python/04_api_client/` makes the same live
+call as `ruby/04_api_client`.
+
+This is the fifth of thirteen steps (`00_config` → `12_context`). Step 04 is
+substantively step 03 **plus an HTTP client with retries**. No serialization
+changes: the backends, `PromptBuilder`, `Registry`, and `Context` are untouched.
+
+**This step breaks the verification model used by every step before it.** The
+example's output now contains a live model response, so the byte-for-byte stdout
+diff that gated steps 00–03 cannot gate this one. See **Verification** — that
+section is the substance of this plan, not boilerplate.
+
+---
+
+## Starting state (already done — do not redo)
+
+`week1_baseline/python/04_api_client/` **already exists** as a byte-for-byte
+copy of `python/03_prompt_builder/` (verified: `diff -rq` excluding
+`__pycache__` is empty). I created it with `rsync` as the standard prep step; if
+you would rather make it yourself, delete it and re-copy — nothing else depends
+on it yet.
+
+The repo-root `.venv/` already exists and needs no new packages: Ruby's `Client`
+uses only `net/http`, and the Python equivalent uses only `urllib.request`.
+`requirements.txt` is unchanged from 00–03.
+
+`week1_baseline/bin/ruby/04_api_client` already exists (untracked) and runs.
+`bin/python/04_api_client` does **not** exist yet.
+
+The Ruby step-04 example already has your `BOUKENSHA_DIR` depth fix applied in
+the working tree (`../../../` → `../../../../`). The Python preamble uses
+`parents[4]` and is already correct — do not touch it.
+
+---
+
+## Decisions (carried over — settled, do not re-litigate)
+
+- **One shared `.venv/` at the repo root**; `pip` + `requirements.txt`.
+- **Self-contained snapshot per step** — duplication is intentional.
+- **`__str__` / `__repr__` matched to Ruby verbatim.**
+- **`@dataclass` for value objects**, plain classes for things with behaviour.
+- **Tools registered with the `@registry.tool(...)` decorator.**
+- **Backends reached as `backends.Anthropic`** via the subpackage.
+- **`PromptBuilder.url()` / `.headers()` are methods, not properties** — settled
+  in step 03 precisely because this step calls them.
+- **Missing `settings.yaml` raises `FileNotFoundError`** (deliberate divergence).
+- **Shared repo-root `.boukensha/`**, **no test framework**, **`PyYAML`
+  accepted** as a standard-library-first exception.
+- **Mirror Ruby's bugs and document them; never edit the Ruby side.**
+
+---
+
+## What Ruby changed between step 03 and step 04
+
+Confirmed by `diff -ru ruby/03_prompt_builder ruby/04_api_client --exclude=Gemfile.lock`:
+
+| Change | Ruby |
+|---|---|
+| **New** `lib/boukensha/client.rb` | `Client` — POST, retry/backoff, `ApiError`, `JSON.parse` |
+| `lib/boukensha/errors.rb` | Adds `class ApiError < StandardError` |
+| `lib/boukensha/config.rb` | `PROMPTS_DIR` gains a `../` (see the warning below) + one stray blank line |
+| `lib/boukensha/tasks/base.rb` | Error text `settings.yml` → `settings.yaml`; `fetch` gains a Hash guard |
+| `lib/boukensha.rb` | Drops the `backends/base` require; adds the `client` require |
+| `prompts/system.md` | Rewritten — new "You are Boukensha…" persona text |
+| `examples/example.rb` | Rewritten: `read_file`/`list_directory` tools, one user message, and a real `client.call` |
+| `README.md` | Rewritten for the client |
+
+`tool.rb`, `message.rb`, `context.rb`, `registry.rb`, `prompt_builder.rb`, all
+five `backends/*.rb`, `tasks/player.rb`, and `Gemfile` are byte-identical
+between the two Ruby steps.
+
+> ⚠️ **`tasks/base.rb`'s two changes are already in the Python — do not
+> "port" them.** Ruby fixed an error message that said `settings.yml` and added
+> `return nil unless settings.is_a?(Hash)` to `fetch`. Python's
+> `tasks/base.py` has said `settings.yaml` since step 00 and its `_fetch`
+> already guards with `isinstance(settings, dict)`. Ruby has caught up to
+> Python here. `tasks/base.py` needs **no edit**.
+
+> ⚠️ **`PROMPTS_DIR` now points at a directory that does not exist.**
+> `File.expand_path("../../../prompts", __dir__)` from
+> `04_api_client/lib/boukensha/` resolves to `week1_baseline/ruby/prompts` —
+> one level above the step folder. Verified: that path is absent, while
+> `04_api_client/prompts/system.md` (the file it is meant to find) is present.
+> The bug is invisible today only because `prompt_override.system: true` sends
+> the player task to `.boukensha/prompts/player/system.md` and the packaged
+> default is never read. **This is not a one-off typo** — the same
+> `../../../prompts` form appears in every step from 04 through 11, each of
+> which ships a `prompts/` directory it cannot reach. See **OQ 1**; do not
+> silently pick a side.
+
+> ⚠️ **The Ruby step-04 README is stale in three separate ways.** Its "New
+> Files" table lists `backends/base.rb`, `tasks/base.rb`, `tasks/player.rb`, and
+> `prompts/system.md` as new — all four arrived in step 03. Its "Updated Files"
+> table describes config.rb as switching to `tasks.player`, which was also step
+> 03. Its "Output eaxmple" block was captured on another machine from a path
+> that no longer exists (`03_api_client/examples/step3.rb`), against
+> `claude-opus-4-5` rather than the configured `claude-haiku-4-5`, and shows
+> Ruby hash-inspect output (`"key"=>value`) rather than the
+> `JSON.pretty_generate` the code actually calls — and omits the `Config:` /
+> `Provider:` / `Model:` lines entirely. Read it for the *intent* of the step.
+> Take no output from it.
+
+> ⚠️ **`lib/boukensha.rb` dropping the `backends/base` require is a Ruby-only
+> no-op.** Each backend file already does `require_relative "base"`, so `Base`
+> still loads. Python's `backends/__init__.py` imports `Base` so that
+> `backends.Base` resolves for anyone subclassing it — removing that import to
+> "match" would break the export for no gain. Leave it.
+
+---
+
+## Read before writing
+
+| Ruby source (read this) | Purpose |
+|---|---|
+| `ruby/04_api_client/lib/boukensha/client.rb` | **`Client`** — the whole step |
+| `ruby/04_api_client/lib/boukensha/errors.rb` | `ApiError` |
+| `ruby/04_api_client/examples/example.rb` | The example to reproduce, including the two new tools |
+| `ruby/04_api_client/prompts/system.md` | New persona text — copy verbatim |
+| `ruby/04_api_client/lib/boukensha/config.rb` | The `PROMPTS_DIR` change (OQ 1) |
+
+Supporting context (read for intent, do not port):
+
+| File | Why |
+|---|---|
+| `ruby/04_api_client/README.md` | "No Dependencies" section — the stdlib-only stance is load-bearing for OQ 2. Everything else in it has drifted; see the warning above |
+| `week1_baseline/ruby/ITERATIONS.md` | The standard-library-first rule |
+| `python/03_prompt_builder/boukensha/prompt_builder.py` | Confirms `url()` / `headers()` / `to_api_payload(*, max_output_tokens=…)` are callables with those exact signatures |
+
+Live config consumed (do not modify): repo-root `.boukensha/` — `settings.yaml`
+(`provider: anthropic`, `model: claude-haiku-4-5`), `.env` (`ANTHROPIC_API_KEY`),
+`prompts/player/system.md`.
+
+---
+
+## The work — a checklist over the existing folder
+
+### ➕ Add — `boukensha/client.py`
+
+The only substantial new code. Constants first, mirroring Ruby exactly:
+
+| Ruby | Python |
+|---|---|
+| `RETRYABLE_STATUS_CODES = [408, 409, 429, 500, 502, 503, 504]` | same list (a tuple or frozenset is fine — it is only ever membership-tested) |
+| `MAX_RETRIES = 3` | same |
+| `BASE_RETRY_DELAY = 0.5` | same |
+| `retry_delay(attempt) = BASE_RETRY_DELAY * (2**(attempt - 1))` | same — yields 0.5, 1.0, 2.0 |
+
+`TRANSIENT_ERRORS` needs a real mapping, not a transliteration:
+
+| Ruby | Python |
+|---|---|
+| `Errno::ECONNRESET` | `ConnectionResetError` |
+| `Errno::ECONNREFUSED` | `ConnectionRefusedError` |
+| `Net::OpenTimeout`, `Net::ReadTimeout`, `Timeout::Error` | `TimeoutError` (`socket.timeout` is an alias for it in 3.10+) |
+| `OpenSSL::SSL::SSLError` | `ssl.SSLError` |
+| `SocketError` | `socket.gaierror` (DNS failure) |
+| `EOFError` | `EOFError` |
+| — | `urllib.error.URLError` — the wrapper `urllib` puts around most of the above |
+
+> ⚠️ **`urllib.error.HTTPError` is a subclass of `URLError`. Catch it first.**
+> This is the one structural trap in the step. Ruby's `Net::HTTP#request`
+> *returns* a response object whatever the status, so Ruby checks
+> `response.code` afterwards. `urllib.request.urlopen` instead **raises**
+> `HTTPError` on any non-2xx. If the `except` clauses are ordered the other way
+> round, every 500 is swallowed by the transient-error branch and the
+> status-code retry list never runs — the failure is silent and looks like a
+> flaky network.
+
+Structure of `call`:
+
+| Ruby | Python |
+|---|---|
+| `def initialize(builder)` | `def __init__(self, builder): self.builder = builder` |
+| `def call(max_output_tokens: 1024)` | `def call(self, *, max_output_tokens=1024)` |
+| `URI(@builder.url)` + `Net::HTTP.new` + `use_ssl` | `urllib.request.Request(self.builder.url(), data=…, headers=self.builder.headers(), method="POST")` — `urlopen` picks TLS from the scheme, so there is no `use_ssl` line to port |
+| `request.body = payload.to_json` | `json.dumps(payload).encode()` — `urlopen` needs bytes |
+| `loop do … attempts += 1` | `while True:` with the same counter |
+| `rescue *TRANSIENT_ERRORS => e` | `except TRANSIENT_ERRORS as e:` (a tuple) |
+| `raise ApiError, "…" if attempts > MAX_RETRIES` | same guard, same message |
+| `sleep retry_delay(attempts); next` | `time.sleep(self._retry_delay(attempts)); continue` |
+| `retryable_response?(response) && attempts <= MAX_RETRIES` | `status in RETRYABLE_STATUS_CODES and attempts <= MAX_RETRIES` |
+| `JSON.parse(response.body)` | `json.loads(body)` |
+
+Message strings, to the byte:
+
+- transient exhaustion —
+  `f"API request failed after {attempts} attempts: {type(e).__name__}: {e}"`
+  (Ruby's `e.class` prints `Errno::ECONNRESET`, Python's prints
+  `ConnectionResetError`; the shape matches, the class names cannot)
+- non-success —
+  `f"API request failed after {attempts} attempt{'' if attempts == 1 else 's'} ({status}): {body}"`
+
+Note Ruby pluralizes only the second message; the first always says "attempts"
+even when there was one. Mirror the inconsistency rather than tidying it.
+
+The retry ceiling is **4 total attempts** (1 initial + `MAX_RETRIES`). Check the
+port against that number, since the `>` / `<=` asymmetry between Ruby's two
+guards makes it easy to land on 3 or 5.
+
+> **`verify_mode` and the certificate comment do not port.** Ruby sets
+> `OpenSSL::SSL::VERIFY_PEER` and carries a commented-out `ca_file` line with a
+> note about macOS vs Linux/WSL2 cert paths; the README devotes a section to it.
+> Python's `urlopen` verifies against the system trust store by default, so the
+> whole problem is absent. Do not construct an `ssl.SSLContext` to have
+> something to point at. Note the disappearance in the README, the same way
+> step 02 noted `transform_keys`.
+
+Ruby passes no explicit timeouts, taking `Net::HTTP`'s 60s open/read defaults;
+`urlopen` with no `timeout` blocks on the global socket default (usually
+forever). See **OQ 3**.
+
+### ➕ Add — the launcher
+
+`week1_baseline/bin/python/04_api_client` — copy of
+`bin/python/03_prompt_builder` with both path segments changed; `chmod +x`.
+
+### ✏️ Edit — `boukensha/errors.py`
+
+Add, keeping Ruby's declaration order (`UnknownToolError`, `ApiError`,
+`UnsupportedModelError`):
+
+```python
+class ApiError(Exception):
+    """Raised when an API request fails after exhausting retries."""
+```
+
+### ✏️ Edit — `boukensha/__init__.py`
+
+Export `Client` and `ApiError`; add `from .client import Client` last, matching
+the Ruby require order.
+
+### ✏️ Edit — `prompts/system.md`
+
+Replace the step-03 text with step 04's verbatim:
+
+```
+You are Boukensha, an autonomous player exploring a CircleMUD world.
+
+Use available tools to observe the world, act deliberately, and explain only what matters for the current turn.
+```
+
+Note this is the *packaged default*, which the example never reads — the player
+task's override wins. It still has to be right for later steps.
+
+### ✏️ Edit — `examples/example.py`
+
+Keep the preamble. Replace the two tools and the message block:
+
+| Ruby (04 example) | Python |
+|---|---|
+| `registry.tool("read_file", … parameters: { path: … })` with `File.read(path)` | decorator form; body `return Path(path).read_text()` |
+| `registry.tool("list_directory", …)` with `Dir.entries(path).reject { \|f\| f.start_with?(".") }.join("\n")` | `return "\n".join(f for f in os.listdir(path) if not f.startswith("."))` — `os.listdir` already omits `.` and `..`, so only the dotfile filter is needed |
+| single `ctx.add_message(:user, "What files are in the current directory?")` | same; the three step-03 messages are gone |
+| backend `case` gains no new providers, only reformatting | leave the `if/elif` chain as it is |
+| `client = Boukensha::Client.new(builder)` | `client = Client(builder)` |
+| `puts "Sending request to #{builder.url}..."` | `print(f"Sending request to {builder.url()}...")` — **note the parentheses** |
+| `response = client.call` | `response = client.call()` |
+| `puts JSON.pretty_generate(response)` | `print(json.dumps(response, indent=2, ensure_ascii=False))` |
+
+Print order is: header, blank, `Config:`, `Provider:`, `Model:`,
+`Sending request to …`, blank, then the call, then `Raw response:` and the JSON.
+The tool blocks are never dispatched this step — only their schemas travel to
+the API — so their bodies do not affect output. Port them correctly anyway;
+step 05 calls them.
+
+### ✏️ Edit — `README.md`
+
+Adapt to step 04: retitle, point at the Ruby README **with a note that its file
+tables and output block are stale**, and document the Python-specific calls —
+`urllib` over `requests` and why (OQ 2), the `HTTPError`-before-`URLError`
+ordering trap, the SSL setup that evaporates, `type(e).__name__` vs Ruby's
+`e.class`, and whatever OQ 1 and OQ 3 land on. Also record the new verification
+approach, since the stdout gate no longer applies.
+
+### ✅ Leave untouched
+
+`boukensha/tasks/*` (see the warning above — Ruby caught up to Python),
+`boukensha/backends/*`, `prompt_builder.py`, `context.py`, `message.py`,
+`tool.py`, `registry.py`, `requirements.txt`.
+
+---
+
+## Verification
+
+The gate changes this step. `client.call()` returns a live model response:
+non-deterministic wording, non-deterministic token counts, a fresh `id` every
+run — and it costs money per invocation. `diff <(ruby) <(python)` would fail on
+two correct implementations.
+
+Replace it with narrower checks:
+
+1. **Ruby still runs unchanged** — `./week1_baseline/bin/ruby/04_api_client`.
+   Run once, not in a loop.
+
+2. **Deterministic-prefix diff.** Everything before the response is fixed. Diff
+   the first six lines, which covers the header, `Config:`, `Provider:`,
+   `Model:`, and the `Sending request to …` URL:
+   ```sh
+   diff <(./week1_baseline/bin/ruby/04_api_client | head -6) \
+        <(./week1_baseline/bin/python/04_api_client | head -6)
+   ```
+   Expected:
+   ```
+   === BOUKENSHA Step 4: API Client ===
+
+   Config: #<Boukensha::Config dir=<repo>/.boukensha tasks=player>
+   Provider: anthropic
+   Model: claude-haiku-4-5
+   Sending request to https://api.anthropic.com/v1/messages...
+   ```
+
+3. **Structural check on the response.** Both runs must produce a JSON object
+   with the same top-level keys (`id`, `type`, `role`, `content`, `model`,
+   `stop_reason`, `usage`). Compare key sets, not values:
+   ```sh
+   ./week1_baseline/bin/python/04_api_client | sed -n '/^{/,$p' \
+     | python3 -c "import json,sys; print(sorted(json.load(sys.stdin)))"
+   ```
+   Same command against the Ruby run; the two sorted key lists must match. This
+   proves the payload was accepted and parsed, which is the actual claim of the
+   step.
+
+4. **Error path, for free.** A bogus key returns 401, which is deliberately
+   **not** in `RETRYABLE_STATUS_CODES` — so it fails on the first attempt, costs
+   nothing, and exercises `ApiError` end to end:
+   ```sh
+   ANTHROPIC_API_KEY=sk-ant-invalid ./week1_baseline/bin/python/04_api_client
+   ```
+   It must raise `ApiError` whose message begins
+   `API request failed after 1 attempt (401): ` — singular "attempt", proving
+   the pluralization branch. Run the same against Ruby and compare the message
+   prefix.
+
+5. **Retry logic, offline.** The live call never exercises backoff. Stand up a
+   throwaway `http.server` that returns 503 twice then 200, point a `Client` at
+   it via a stub builder, and assert: 3 attempts total, sleeps of 0.5 and 1.0,
+   and a parsed body at the end. Then have it return 503 four times and assert
+   `ApiError` with `after 4 attempts`. Free, fast, and the only way to prove the
+   `>` / `<=` boundary is right. Put it in the scratchpad, not the repo.
+
+6. `grep -rn "requests\|verify_mode\|ca_file" week1_baseline/python/04_api_client
+   --include='*.py'` is empty.
+
+---
+
+## Open Questions
+
+1. **`PROMPTS_DIR`: mirror Ruby's broken path, or keep Python's working one?**
+   Ruby step 04 changed it to `../../../prompts`, which resolves outside the step
+   folder to a directory that does not exist, and steps 05–11 all carry the same
+   form. Python currently has `parents[1] / "prompts"`, which is correct.
+   Mirroring means `parents[2]` and a fallback that silently returns `None` the
+   moment anyone sets `prompt_override.system: false`. Neither choice changes
+   this example's output, because the override is on.
+   *Recommend:* **keep Python correct** and document the divergence. The
+   standing rule is to mirror Ruby's bugs, but that rule earns its keep when the
+   bug is inert and comparable — like step 03's `to_messages` arity mismatch,
+   which nothing calls. This one silently disables a feature that the config
+   file explicitly offers, and it would be reproduced eight more times. Worth
+   raising with your instructor rather than propagating; if you would rather
+   stay bug-for-bug faithful, say so and I will use `parents[2]`.
+    - if the path needs fixing then fix it
+    
+2. **`urllib.request` or `requests`?** The Ruby README is explicit: "No gems, no
+   `bundle install`. This is intentional — the HTTP call itself is trivial and
+   should be visible, not hidden behind a library."
+   *Recommend:* `urllib.request`. `requests` would be the normal production
+   choice and is roughly a third of the code, but taking it here inverts the
+   one point the step is making, and it would be the first runtime dependency
+   added since step 00. `urllib` also keeps `requirements.txt` untouched.
+
+3. **Explicit socket timeout?** Ruby inherits `Net::HTTP`'s 60-second open and
+   read defaults. Python's `urlopen` with no `timeout` uses the global socket
+   default, which is normally "block forever" — so a hung connection hangs the
+   example instead of retrying, and the transient-error path never fires.
+   *Recommend:* pass `timeout=60` to `urlopen` to match Ruby's effective
+   behaviour, and note it in the README as a case where matching Ruby required
+   writing something Ruby did not write.
+
+4. **Where should the retry test live?** Verification item 5 needs a local HTTP
+   server, which is real code with no home in a repo that has deliberately
+   avoided a test framework since step 00.
+   *Recommend:* scratchpad only, run once during the port, with the result
+   recorded in the README. Adding `tests/` would break the standing "the example
+   is the smoke test" decision, and that decision should be revisited
+   deliberately, not smuggled in under a bug fix.
+
+5. **Should the example still print the request payload?** Step 03's example
+   ended by pretty-printing `to_api_payload`; step 04 replaces that with the
+   response, so the payload is no longer visible anywhere.
+   *Recommend:* follow Ruby exactly and drop it. The payload is one step back in
+   the history if anyone needs it, and diverging here would put the two examples
+   permanently out of sync.
