@@ -1,4 +1,3 @@
-ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
 require_relative "../lib/boukensha"
 
 # Config is loaded automatically inside Boukensha.run — system prompt, model,

@@ -1,0 +1,375 @@
+# Port Plan — Step 08: The REPL Loop (Ruby → Python)
+
+Port `Boukensha::Repl` — the interactive session loop — plus `Boukensha.repl`,
+a `VERSION` constant, and the three supporting changes that make conversation
+history actually accumulate.
+
+This is the ninth of thirteen steps (`00_config` → `12_context`).
+
+> **The step's real subject is memory, not the loop.** A REPL that forgot its own
+> replies would be useless, and up to step 07 the agent never put its final text
+> into the Context — it returned it and dropped it. `agent.rb` gains three
+> `add_message(:assistant, …)` calls, and that is what makes the REPL work.
+
+---
+
+## Starting state (already done — do not redo)
+
+`week1_baseline/python/08_the_repl_loop/` **already exists** as a clean copy of
+`python/07_the_run_dsl/` — verified: `diff -rq --exclude=__pycache__` is empty.
+
+The repo-root `.venv/` needs no new packages. `requirements.txt` unchanged from
+00–07.
+
+`week1_baseline/bin/ruby/08_the_repl_loop` exists and runs.
+`bin/python/08_the_repl_loop` does **not** exist yet.
+
+> ⚠️ **`BOUKENSHA_DIR` moved out of the Ruby examples on 01-08-2026.** All 12
+> Ruby `example.rb` files lost their `ENV["BOUKENSHA_DIR"] ||= …` line; the
+> launchers in `bin/ruby/*` now derive `REPO_ROOT` once and export it. **The
+> Python side has not had this treatment** — `example.py` still carries
+> `os.environ.setdefault(..., parents[4] / ".boukensha")` in all 8 steps. See
+> **OQ 2**; it affects what step 08's `example.py` should look like.
+
+---
+
+## Decisions (carried over — settled, do not re-litigate)
+
+- **One shared `.venv/` at the repo root**; `pip` + `requirements.txt`.
+- **Self-contained snapshot per step** — duplication across steps is intentional.
+- **Ruby blocks become Python decorators** (`@dsl.tool(...)`, `@registry.tool(...)`).
+- **`instance_eval` has no Python equivalent** — the DSL object is an explicit
+  parameter, `run(..., tools=callable)`. Settled in step 07.
+- **Module-level state in `runtime.py`; `run()` in `run.py`** — both re-exported
+  from `__init__.py`.
+- **Ruby's `!`/`?` map to `set_`/`is_`.**
+- **`json.dumps` with `separators=(",", ":")` and `ensure_ascii=False`.**
+- **Match Ruby's semantics, not a fixed idiom** — `is None` where Ruby tests for
+  `nil`, `or` where Ruby tests truthiness. Settled in step 07.
+- **No test framework** — the example is the smoke test; verification lives in
+  the scratchpad.
+- **Mirror Ruby's bugs and document them; never edit the Ruby side.**
+
+---
+
+## What Ruby changed between step 07 and step 08
+
+Confirmed by `diff -ru ruby/07_the_run_dsl ruby/08_the_repl_loop --exclude=Gemfile.lock`:
+
+| Change | Ruby | Python action |
+|---|---|---|
+| **New** `lib/boukensha/repl.rb` | `Repl` — banner, command dispatch, turn loop | **Port in full** |
+| **New** `lib/boukensha/version.rb` | `VERSION = "0.8.0"` | **Port** |
+| `lib/boukensha.rb` | `+Boukensha.repl` (~55 lines, mostly copied from `run`); `+require version`, `+require repl`; `run`'s doc comment cut to two lines | **Port** (see **OQ 1**) |
+| `lib/boukensha/agent.rb` | `+@context.add_message(:assistant, …)` in **three** places | **Port** — the heart of the step |
+| `lib/boukensha/context.rb` | `+clear_messages!`; trailing newline restored | **Port the method** |
+| `lib/boukensha/client.rb` | 401 gets its own `ApiError` message | **Port** |
+| `lib/boukensha/config.rb` | `resolve_dir` gains a **cwd fallback** tier | **Port** — see below |
+| `examples/example.rb` | Rewritten around `Boukensha.repl`; tools now point at the step-07 folder | **Port** |
+| `README.md` | Rewritten | **Adapt** |
+
+Everything else — `run_dsl.rb`, `logger.rb`, `prompt_builder.rb`, `registry.rb`,
+all five backends, `tasks/*`, `errors.rb`, `tool.rb`, `message.rb` — is
+byte-identical.
+
+### `Config#resolve_dir` is now three-tier
+
+```ruby
+return … if ENV["BOUKENSHA_DIR"]          # 1. explicit override
+cwd_dir = Pathname.new(Dir.pwd).join(".boukensha")
+return cwd_dir.to_s if cwd_dir.directory?  # 2. ./.boukensha
+Pathname.new(DEFAULT_DIR).expand_path.to_s # 3. ~/.boukensha
+```
+
+Note the interaction with yesterday's launcher change: the launcher `cd`s into
+the *step* directory, which has no `.boukensha`, so tier 2 never fires under
+`bin/`. It fires when someone runs from the repo root. This makes direct
+execution safer than it was, but does **not** replace the exported variable.
+
+> ⚠️ **`/quiet` and `/loud` do nothing.** `Repl` calls `Boukensha.quiet!` /
+> `loud!`, and the REPL prints "(logging suppressed — type /loud to re-enable)",
+> but **nothing anywhere reads `quiet?`** — `grep` over `08/lib` finds only the
+> definition. The message is currently false. See **OQ 4**.
+
+> ⚠️ **`rescue LoopError` in `Repl#run_turn` is dead.** `LoopError` is declared
+> in `errors.rb` and raised nowhere, in any step. This is now its third
+> appearance in the journal: added in 05, deleted in 06, restored in 07, and in
+> 08 it finally gets a `rescue` — but still no `raise`.
+
+> ⚠️ **The Ruby step-08 README is titled "Step 7 — The REPL Loop"**, and its
+> body calls step 07 "step 6" and step 08 "step 7" throughout. Fifth consecutive
+> step with a stale README. Its prose on why the assistant message must be
+> persisted is accurate and worth reading.
+
+---
+
+## Read before writing
+
+| Ruby source (read this) | Purpose |
+|---|---|
+| `ruby/08_the_repl_loop/lib/boukensha/repl.rb` | **`Repl`** — the whole step, 138 lines |
+| `ruby/08_the_repl_loop/lib/boukensha.rb` | `Boukensha.repl`; diff against 07 rather than reading fresh |
+| `ruby/08_the_repl_loop/lib/boukensha/agent.rb` | The three `add_message` calls — diff only |
+| `ruby/08_the_repl_loop/examples/example.rb` | The example to reproduce |
+
+---
+
+## The work — a checklist over the existing folder
+
+### ➕ Add — `boukensha/version.py`
+
+```python
+VERSION = "0.8.0"
+```
+
+Mirror Ruby's constant name. A `__version__ = VERSION` alias is optional and
+harmless if you want the Python convention available too.
+
+### ➕ Add — `boukensha/repl.py`
+
+| Ruby | Python |
+|---|---|
+| `PROMPT = "boukensha> "` | same |
+| `HELP = <<~HELP` | triple-quoted string; **squiggly heredoc strips indentation** — the stored value has two leading spaces on each command line and a trailing newline. Reproduce exactly; it is printed |
+| `initialize(context:, registry:, builder:, client:, logger:, config_dir: nil, provider: nil, model: nil, version: nil, api_key: nil, task_settings: nil, max_iterations: nil, max_output_tokens: nil)` | keyword-only `__init__` with the same defaults |
+| `@turn = 0` | `self.turn = 0` |
+| `loop do … end` | `while True:` |
+| `print PROMPT; $stdout.flush` | `print(PROMPT, end="", flush=True)` |
+| `input = $stdin.gets; break unless input` | `try: line = input() / except EOFError: break` — **different mechanism**, see **OQ 3** |
+| `input.chomp.strip` | `line.strip()` — `strip` already removes the newline |
+| `next if input.empty?` | `if not line: continue` |
+| `case input when "/exit", "/quit"` | `if line in ("/exit", "/quit")` … chain |
+| `Boukensha.quiet!` / `loud!` | `runtime.set_quiet()` / `set_loud()` |
+| `@context.clear_messages!` | `self.context.clear_messages()` — no `!` in Python |
+| `rescue Interrupt` | handled at the `repl()` level, not here — mirror Ruby's placement |
+
+**`banner` is the byte-exact output target.** Points to get right:
+
+- `" " * (9 - ver.length)` pads the box interior. With `"0.8.0"` that is 4
+  spaces. **Ruby raises `ArgumentError` on a negative count; Python silently
+  yields `""`.** Unreachable at 0.8.0, worth a comment.
+- The box uses U+2554/2557/255A/255D/2550/2551 and the key status uses ✓/✗.
+  Python prints these fine as UTF-8; no escaping.
+- `config_exists = @config_dir && Dir.exist?(@config_dir)` → `Path(...).is_dir()`
+  guarded on `config_dir` being set.
+- The heredoc starts with a blank line and ends with one — that is why the real
+  output has two blank lines after the `Config:` line and one before the prompt.
+
+`run_turn` builds a **new `Agent` per turn**, sharing the one `Context`:
+
+| Ruby | Python |
+|---|---|
+| `@turn += 1; @logger.turn(n: @turn)` | same — this is the first caller of `Logger#turn`, added unused in step 07 |
+| `@context.add_message(:user, input)` | `self.context.add_message("user", line)` |
+| `Agent.new(...)` then `agent.run` | `Agent(...)` then `.run()` |
+| `puts; puts result` | `print()` then `print(result)` |
+| `rescue LoopError` / `rescue ApiError` | `except LoopError` / `except ApiError` — keep both, note LoopError is unreachable |
+
+### ➕ Add — `Boukensha.repl` in `boukensha/run.py`
+
+Ruby's `self.repl` is **~45 lines copy-pasted from `self.run`**, identical from
+`cfg = config` down to the `Logger.new(...)` call, diverging only at the tail:
+`run` does `ctx.add_message(:user, task); agent.run`, while `repl` constructs a
+`Repl` and calls `.start`. See **OQ 1** for whether Python mirrors the
+duplication.
+
+Tail specifics regardless of that decision:
+
+- `repl` takes no `task:`.
+- It passes `config_dir: cfg.dir`, `provider: backend`, `model:`,
+  `version: VERSION`, `api_key:` to `Repl` — the banner's inputs.
+- `rescue Interrupt` → `except KeyboardInterrupt: print("\nInterrupted.")`.
+- `ensure logger&.close` → the same `logger = None` before `try` / `finally`
+  pattern settled in step 07.
+
+### ✏️ Edit — `boukensha/agent.py`
+
+Three additions, and they are the step:
+
+| Where | Ruby |
+|---|---|
+| `run`, the `end_turn` branch | `@context.add_message(:assistant, text)` **after** `turn_end`, before `return` |
+| `_wrap_up`, success path | same, after `turn_end` |
+| `_wrap_up`, `ApiError` path | `@context.add_message(:assistant, msg)` |
+
+> ⚠️ **This is not a double-add.** `_handle_tool_calls` already appends the
+> assistant's *tool-use* content; these three add the assistant's *final text*,
+> which previously was returned and never stored. Verify by asserting the
+> message sequence, not by eyeballing.
+
+### ✏️ Edit — `boukensha/context.py`
+
+```python
+def clear_messages(self):
+    self.messages = []
+```
+
+Ruby's `clear_messages!` — drop the bang. Rebinds rather than mutating in place,
+matching Ruby's `@messages = []`; anything holding the old list keeps it.
+
+### ✏️ Edit — `boukensha/client.py`
+
+Before the generic failure, add the 401 case with Ruby's exact wording:
+`"authentication failed (401) — check your API key"` (note the em dash). 401 is
+not in the retryable list, so this fires on the first attempt.
+
+### ✏️ Edit — `boukensha/config.py`
+
+`_resolve_dir` gains the middle tier. Keep the three comments; they are the
+clearest statement of precedence in the codebase.
+
+### ✏️ Edit — `boukensha/__init__.py`
+
+Export `Repl`, `repl`, and `VERSION`. Import `version` first (Ruby requires it
+first), `repl` after `run_dsl`.
+
+### ✏️ Edit — `examples/example.py`
+
+| Ruby (08) | Python |
+|---|---|
+| no `=== BOUKENSHA Step N ===` banner | **the step banner is gone** — the example prints only `Config:` and then the REPL's own banner |
+| `base_dir = File.expand_path("../../07_the_run_dsl", __dir__)` | `Path(__file__).resolve().parents[2] / "07_the_run_dsl"` — **points at the previous step**, deliberately, as a playground with files to read |
+| `Boukensha.repl do … end` | `boukensha.repl(tools=define_tools)` |
+| `list_directory` gains `.sort` | `sorted(...)` — new this step |
+| parameter descriptions reworded | copy verbatim; they go to the model |
+
+### ➕ Add — the launcher
+
+`week1_baseline/bin/python/08_the_repl_loop` — copy of
+`bin/python/07_the_run_dsl` with both path segments changed; `chmod +x`. If
+**OQ 2** is taken, also add the `SCRIPT_DIR` / `REPO_ROOT` / `BOUKENSHA_DIR`
+block matching `bin/ruby/*`.
+
+### ✏️ Edit — `README.md`
+
+Document: the assistant-message persistence and why it is the step; the
+new-Agent-per-turn design; EOF vs `Interrupt` handling; `/quiet` being a no-op in
+both languages; the dead `LoopError` rescue; the three-tier config resolution;
+and whatever OQ 1–4 land on.
+
+### ✅ Leave untouched
+
+`run_dsl.py`, `logger.py`, `prompt_builder.py`, `registry.py`, `runtime.py`,
+`errors.py`, `tool.py`, `message.py`, all five backends, `tasks/`,
+`prompts/system.md`, `requirements.txt`.
+
+---
+
+## Verification
+
+**New problem: the example does not terminate.** Every prior step ran to
+completion; this one waits on stdin. Everything below drives it with piped input.
+
+1. **Banner diff — the deterministic prefix, and now most of what is checkable:**
+   ```sh
+   diff <(echo -n "" | ./week1_baseline/bin/ruby/08_the_repl_loop) \
+        <(echo -n "" | ./week1_baseline/bin/python/08_the_repl_loop)
+   ```
+   Expected (captured from the real Ruby run; note the two blank lines after
+   `Config:`, the 4-space pad inside the box, and the trailing `boukensha> `
+   with no newline):
+   ```
+   Config: #<Boukensha::Config dir=<repo>/.boukensha tasks=player>
+
+
+   ╔══════════════════════════════════════╗
+   ║  BOUKENSHA MUD Assistant (v0.8.0)    ║
+   ╚══════════════════════════════════════╝
+     config:    <repo>/.boukensha
+     provider:  anthropic (claude-haiku-4-5)  ✓ API key set
+
+     /quiet or /loud   toggle logging
+     /clear           reset conversation history
+     /exit or /quit    leave the REPL
+
+   boukensha>
+   ```
+   (The `/clear` line's spacing is uneven in Ruby — three spaces where the others
+   have four. Reproduce it; do not tidy.)
+
+2. **Built-in commands, offline and free** — pipe a script, diff both outputs:
+   ```sh
+   printf '/help\n/quiet\n/loud\n/clear\n/exit\n' | ./…/08_the_repl_loop
+   ```
+   Asserts the help text, the three acknowledgement lines, `Goodbye.`, and that
+   none of it reaches the model. **No API calls**, so this can run freely.
+
+3. **EOF and interrupt.** `echo -n "" |` exits with no `Goodbye.` (the EOF path
+   just breaks). Ctrl-C — simulate by raising `KeyboardInterrupt` in a stubbed
+   `input` — prints `\nInterrupted.` and still closes the logger.
+
+4. **Offline REPL-integration checks** with the step-07 stub-client seam:
+   - **history accumulates across turns** — after two turns the Context holds
+     `user, assistant, user, assistant`, and the second turn's `prompt` event
+     carries all four;
+   - **the final assistant text is in the Context**, which it was not in step 07
+     — the regression guard for this step's whole point;
+   - a tool-using turn stores assistant tool-use content *and* the final text,
+     in that order, without duplication;
+   - `/clear` empties messages but leaves `context.tools` intact and resets the
+     turn counter;
+   - `logger.turn(n=)` fires once per turn with the right `n`, and **not** for
+     built-in commands;
+   - a new `Agent` is constructed per turn while the `Context` object is the
+     same instance throughout;
+   - `ApiError` in a turn prints `[error] API call failed: …` and the REPL keeps
+     going rather than exiting.
+
+5. **`Config` three-tier resolution** — `BOUKENSHA_DIR` wins; with it unset and
+   a `.boukensha` in cwd, cwd wins; with neither, `~/.boukensha`. Use `tmp_path`
+   and `os.chdir`, restoring cwd after.
+
+6. **401 message** — stub a 401 response and assert the exact string, and that it
+   is raised on the first attempt (no retries).
+
+7. **Live smoke test, once.** `printf 'What tools do you have?\n/exit\n' |` each
+   launcher; both exit 0, both write a session log containing a `turn` event, and
+   both parse in `log_viz`.
+
+---
+
+## Open Questions
+
+1. **Mirror `repl`'s 45 duplicated lines, or extract a shared builder?** Ruby's
+   `self.repl` is `self.run` copy-pasted with a different tail. Mirroring gives a
+   readable Ruby↔Python diff; extracting gives one place to change.
+   *Recommend:* **extract a private `_build_session(...)`** in `run.py` returning
+   the assembled `(ctx, registry, builder, client, logger, task_settings,
+   max_iterations, max_output_tokens)`, with `run()` and `repl()` as thin tails
+   over it. Two reasons. First, this codebase has already demonstrated twice this
+   week what happens to parallel copies that must be hand-synced — the
+   `LoopError` / `mud_*` churn across steps 05–07, and the `BOUKENSHA_DIR` path
+   that drifted in 4 of 13 files. Second, it is behaviour-preserving, so every
+   verification check above is unaffected either way. The cost is a structural
+   divergence in future `diff`s, which is real — but steps 09–12 will keep
+   extending both entry points, and the divergence is one function boundary, not
+   a redesign. Easily reversed if it proves annoying.
+
+2. **Bring the Python side in line on `BOUKENSHA_DIR`?** The Ruby examples lost
+   their env line yesterday; the 8 Python `example.py` files still carry
+   `parents[4]`, which is the same hand-counted depth that just drifted in Ruby.
+   *Recommend:* **yes, as a separate small pass before starting step 08** — add
+   the `SCRIPT_DIR` / `REPO_ROOT` / `: "${BOUKENSHA_DIR:=…}"` block to all 8
+   `bin/python/*` and delete the `os.environ.setdefault` from all 8 `example.py`.
+   It keeps the two trees comparable, which is what makes the per-step diffs
+   readable, and it removes the same latent bug. Strictly outside this step's
+   delta, so it should be its own commit.
+
+3. **How should Python read a line?** Ruby's `$stdin.gets` returns `nil` at EOF;
+   Python's `input()` raises `EOFError`, and also strips the newline itself.
+   *Recommend:* `try: line = input() except EOFError: break`, and drop Ruby's
+   `.chomp` since `strip()` covers it. Do **not** use `sys.stdin.readline()` to
+   mimic Ruby more literally — `input()` gets GNU readline behaviour (history,
+   line editing) for free when the module is available, which is what a REPL
+   user expects. Note that this means Python's REPL is *nicer* than Ruby's; that
+   is a divergence worth documenting rather than suppressing.
+
+4. **Port `/quiet` and `/loud` faithfully, knowing they do nothing?** They set a
+   flag no code reads, while printing "(logging suppressed)".
+   *Recommend:* **port them as-is and document the gap** in both the README and
+   the help text discussion. Making them actually suppress output would mean
+   inventing behaviour Ruby does not have, which breaks the banner/command diff
+   in check 2 and puts the Python ahead of the spec — the same mistake rejected
+   in step 07's OQ 4. Worth a journal line: this is the third dead-code surface
+   carried for parity (`LoopError`, `mud_*`, now `quiet`), and step 11's TUI is
+   the likely place `quiet?` finally gets read.

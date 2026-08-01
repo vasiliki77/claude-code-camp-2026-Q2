@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+# The config directory the example reads. Assigned with `:=` so an externally
+# set BOUKENSHA_DIR still wins — the same precedence the examples used to get
+# from `||=`, now resolved once here instead of counting `..` in each step.
+: "${BOUKENSHA_DIR:="$REPO_ROOT/.boukensha"}"
+export BOUKENSHA_DIR
+
+cd "$REPO_ROOT/week1_baseline/ruby/08_the_repl_loop"
+exec bundle exec ruby examples/example.rb

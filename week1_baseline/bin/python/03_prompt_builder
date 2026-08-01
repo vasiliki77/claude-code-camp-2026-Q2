@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Repo root is three levels up from this script (bin/python/ -> bin -> week1_baseline -> root).
-root="$(cd "$(dirname "$0")/../../.." && pwd)"
-venv_python="$root/.venv/bin/python"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+venv_python="$REPO_ROOT/.venv/bin/python"
 
 if [[ ! -x "$venv_python" ]]; then
-  echo "No virtualenv found at $root/.venv" >&2
+  echo "No virtualenv found at $REPO_ROOT/.venv" >&2
   echo "Create it once from the repo root:" >&2
   echo "  python3 -m venv .venv" >&2
   echo "  .venv/bin/pip install -r week1_baseline/python/03_prompt_builder/requirements.txt" >&2
   exit 1
 fi
 
-cd "$root/week1_baseline/python/03_prompt_builder"
+# The config directory the example reads. Assigned with `:=` so an externally
+# set BOUKENSHA_DIR still wins — the same precedence the examples used to get
+# from os.environ.setdefault, now resolved once here instead of counting
+# directory levels in each step. Matches bin/ruby/*.
+: "${BOUKENSHA_DIR:="$REPO_ROOT/.boukensha"}"
+export BOUKENSHA_DIR
+
+cd "$REPO_ROOT/week1_baseline/python/03_prompt_builder"
 exec "$venv_python" examples/example.py

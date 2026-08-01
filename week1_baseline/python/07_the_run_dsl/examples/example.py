@@ -8,12 +8,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import boukensha  # noqa: E402
 
-# Override the config directory so the example works from the repo root.
-# In real usage a user's ~/.boukensha is picked up automatically.
-os.environ.setdefault(
-    "BOUKENSHA_DIR", str(Path(__file__).resolve().parents[4] / ".boukensha")
-)
-
 # Config is loaded automatically inside boukensha.run — system prompt, model,
 # and API key all come from ~/.boukensha (or BOUKENSHA_DIR) by default.
 # You can still override any of them as keyword arguments if you want.

@@ -17,12 +17,6 @@ from boukensha import (  # noqa: E402
     backends,
 )
 
-# Override the config directory so the example works from the repo root.
-# In real usage a user's ~/.boukensha is picked up automatically.
-os.environ.setdefault(
-    "BOUKENSHA_DIR", str(Path(__file__).resolve().parents[4] / ".boukensha")
-)
-
 config = Config()
 player_settings = config.tasks("player")
 system_prompt = Player.system_prompt(
