@@ -1,0 +1,364 @@
+# Port Plan — Step 06: The Logger (Ruby → Python)
+
+Port `Boukensha::Logger` — structured JSONL session logging — into the Python
+step folder, along with the module-level runtime state it depends on
+(`Boukensha.config` / `debug?` / `quiet?`) and the `Agent` rewiring that replaces
+every `puts` with a logged event.
+
+This is the seventh of thirteen steps (`00_config` → `12_context`).
+
+> **The delta is again larger than "a `logger.rb` file being added."** `logger.rb`
+> is new, but `agent.rb` is substantially rewritten, `boukensha.rb` gains module
+> state, and `config.rb` / `errors.rb` each **delete** something. Three further
+> files show in `diff` but need **no** Python change at all — see the table.
+
+> **This step changes what "output" means.** Every `puts` in `agent.rb` is gone.
+> The artifact to verify is no longer stdout, it is the `.jsonl` file. Plan the
+> verification around that from the start — see **Verification**.
+
+---
+
+## Starting state (already done — do not redo)
+
+`week1_baseline/python/06_the_logger/` **already exists** as a copy of
+`python/05_agent_loop/`. You made this copy. Confirm with `diff -rq` (excluding
+`__pycache__`) before starting, so any surprise is found now rather than
+attributed to this port later.
+
+The repo-root `.venv/` needs no new packages — the logger is pure stdlib
+(`json`, `secrets`, `datetime`, `pathlib`). `requirements.txt` is unchanged from
+00–05.
+
+`week1_baseline/bin/ruby/06_the_logger` exists and runs.
+`bin/python/06_the_logger` does **not** exist yet.
+
+Live config consumed (do not modify): repo-root `.boukensha/`. Sessions land in
+`.boukensha/sessions/*.jsonl` because every `examples/example.rb` opens with
+`ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)`,
+overriding `Config::DEFAULT_DIR` (`~/.boukensha`). **Python's `example.py` must
+set the same variable the same way**, or the two languages will write to
+different directories and nothing will be comparable.
+
+---
+
+## Decisions (carried over — settled, do not re-litigate)
+
+- **One shared `.venv/` at the repo root**; `pip` + `requirements.txt`.
+- **Self-contained snapshot per step** — duplication is intentional.
+- **`__str__` / `__repr__` matched to Ruby verbatim.**
+- **`@dataclass` for value objects**, plain classes for things with behaviour.
+- **Tools registered with the `@registry.tool(...)` decorator.**
+- **Backends reached as `backends.Anthropic`** via the subpackage.
+- **`urllib.request`, never `requests`.**
+- **Python's `PROMPTS_DIR` stays correct** (`parents[1]`), diverging from Ruby's
+  broken `../../../prompts`.
+- **`json.dumps` always with `separators=(",", ":")`** — settled in step 05 after
+  it corrupted OpenAI's `function.arguments`. **It matters far more this step:**
+  it is now the format of every line of the deliverable.
+- **No test framework** — the example is the smoke test; scratch verification
+  lives in the scratchpad.
+- **Mirror Ruby's bugs and document them; never edit the Ruby side.**
+
+---
+
+## What Ruby changed between step 05 and step 06
+
+Confirmed by `diff -ru ruby/05_agent_loop ruby/06_the_logger`:
+
+| Change | Ruby | Python action |
+|---|---|---|
+| **New** `lib/boukensha/logger.rb` | `Logger` — JSONL writer, cost/usage metadata | **Port in full** |
+| `lib/boukensha/agent.rb` | Every `puts` → a logged event; `handle_tool_calls` takes `response`; tool dispatch wrapped in `rescue`; `+log_response`, `+normalized_usage` | **Port in full** |
+| `lib/boukensha.rb` | `+module state` (`config`, `quiet!`, `loud!`, `quiet?`, `debug!`, `debug?`); `+require logger`, `+require backends/base` | **Port** (see OQ 1) |
+| `lib/boukensha/config.rb` | **Deletes** `mud_host` / `mud_port` / `mud_username` / `mud_password` | **Delete** the four properties |
+| `lib/boukensha/errors.rb` | **Deletes** `LoopError` | **Delete** it, and its two `__init__.py` mentions |
+| `lib/boukensha/prompt_builder.rb` | `+attr_reader :backend` | **None** — Python's `self.backend` is already public |
+| `lib/boukensha/context.rb` | Whitespace only (alignment of four assignments) | **None** |
+| `examples/example.rb` | `+logger`, passed to `Agent`; banner → Step 6 | **Port** |
+| `README.md` | Rewritten for the logger | **Adapt** |
+
+Everything else — `tool.rb`, `message.rb`, `registry.rb`, `client.rb`, all five
+backends, `tasks/*`, `prompts/system.md` — is byte-identical.
+
+> ⚠️ **`LoopError` is deleted one step after being added.** Step 05's plan
+> (OQ 2) recommended porting it "for surface parity"; Ruby removed it here. That
+> recommendation was right for step 05 and is now reversed — remove it from
+> `errors.py`, from `__init__.py`'s import, and from `__all__`. This is worth a
+> line in the journal: surface parity is a per-step decision, not a standing one.
+
+> ⚠️ **`quiet!` / `loud!` / `quiet?` are dead code in step 06.** Nothing reads
+> them (`grep` confirms: definitions only). `debug?` *is* live — `Logger#raw`
+> gates on it. Port all of them anyway for surface parity with the later steps
+> that use them, and document that three are currently unused.
+
+> ⚠️ **The Ruby step-06 README is stale, as in 28-07 and 31-07.** Its "Logger
+> API" table lists `iteration(n:)` (the code takes `n:` **and** `max:`),
+> `prompt(messages:, tools:, budget:)` (there is no `budget:` parameter),
+> `tool_result(name:, result:)` (the code also takes `ok:` and `error:`), and
+> `response(text:, usage:, task:, backend:)` (missing `stop_reason:`). It omits
+> `limit_reached` and `turn_end` entirely. **Take the API from `logger.rb`, not
+> from the README.** Its prose on why logging is structured is fine.
+
+---
+
+## Read before writing
+
+| Ruby source (read this) | Purpose |
+|---|---|
+| `ruby/06_the_logger/lib/boukensha/logger.rb` | **`Logger`** — the whole step |
+| `ruby/06_the_logger/lib/boukensha/agent.rb` | The rewiring; diff it against 05 rather than reading fresh |
+| `ruby/06_the_logger/lib/boukensha.rb` | The module state block |
+| `ruby/06_the_logger/examples/example.rb` | The example to reproduce |
+
+Reference artifacts (read for the exact wire format — more reliable than the
+README): the two real logs in `.boukensha/sessions/*.jsonl`.
+
+---
+
+## The work — a checklist over the existing folder
+
+### ➕ Add — `boukensha/logger.py`
+
+| Ruby | Python |
+|---|---|
+| `DEFAULT_SESSION_DIR = "sessions"` | same |
+| `initialize(session_id: nil, dir: nil, log: nil, snapshot: {})` | `def __init__(self, *, session_id=None, dir=None, log=None, snapshot=None)` — **`snapshot=None` then `or {}`**, never a mutable default |
+| `FileUtils.mkdir_p(File.dirname(@path))` | `Path(self.path).parent.mkdir(parents=True, exist_ok=True)` |
+| `File.open(@path, "a")` | `open(self.path, "a", encoding="utf-8")` |
+| `write_log({ phase: "session_start" }.merge(snapshot))` | same construction order — snapshot keys land **after** `phase` |
+| `@log_io.puts JSON.generate(event.merge(session_id:, at:))` | `write(json.dumps(..., separators=(",", ":")) + "\n")` then `flush()` |
+| `SecureRandom.hex(4)` | `secrets.token_hex(4)` |
+| `Time.now.utc.strftime("%Y%m%dT%H%M%SZ")` | `datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")` |
+| `@log_io&.close` | `close()` guarding a `None` handle |
+
+Public methods, ported exactly as they are in the code (**not** as the README
+describes them): `iteration(n:, max:)`, `limit_reached(kind:, n:, max:)`,
+`turn_end(reason:, iterations:, tokens: nil)`, `prompt(messages:, tools:)`,
+`tool_call(name:, args:)`, `tool_result(name:, result:, ok: true, error: nil)`,
+`response(text:, usage: nil, stop_reason: nil, task: nil, backend: nil)`,
+`raw(data:)`, `close`.
+
+> ⚠️ **`Time.now.iso8601` has no fractional seconds.** Ruby emits
+> `"2026-08-01T12:50:16+01:00"`. Python's `datetime.now().astimezone().isoformat()`
+> emits `...:16.123456+01:00` and will not match. Use
+> `.isoformat(timespec="seconds")`. Verified against both real session logs.
+
+> ⚠️ **`.compact` applies to `execution_metadata` only, not to the event hashes.**
+> `tool_result` deliberately writes `"error": null` when there is no error, and
+> `turn_end` writes `"tokens": null` — both confirmed in the real logs. Only the
+> `response` event's task/provider/model/usage block drops its nils. A blanket
+> "strip None values" helper in Python would silently change three event types.
+
+> ⚠️ **Key order is part of the output.** Ruby hashes and Python dicts both
+> preserve insertion order, so building the dicts in Ruby's order gives a
+> byte-identical line — but only if you do it deliberately. `response` is
+> `phase, text, usage, stop_reason, task, provider, model, usage_unit,
+> usage_level, input_tokens, output_tokens, cost_usd, session_id, at`, with
+> `session_id` and `at` appended last by the writer.
+
+Private helpers:
+
+| Ruby | Python |
+|---|---|
+| `default_dir` → `File.join(Boukensha.config.dir, DEFAULT_SESSION_DIR)` | see **OQ 1** for how to reach module state without a circular import |
+| `serialize_message(msg)` → `{ role:, content: }` | same; Python's `Message.role` is already a string, Ruby's symbol serializes to the same JSON |
+| `task_name(task)` | **see the trap below** |
+| `provider_name(backend)` | `re.sub(r"([a-z\d])([A-Z])", r"\1_\2", type(backend).__name__).lower()` — drop the `split("::")`, Python has no namespace in `__name__`. Gives `anthropic`, `open_ai`, `gemini`, `ollama`, `ollama_cloud`, matching Ruby |
+| `usage_tokens` / `first_integer(hash, *keys)` | keep the multi-key fallback list (`input_tokens`, `prompt_tokens`, `promptTokenCount`, `prompt_eval_count`); **drop the `key.to_sym` half** — Python JSON dicts have string keys only |
+| `Integer(value)` … `rescue ArgumentError, TypeError` | `int(value)` in `try/except (ValueError, TypeError)` — note Ruby raises `ArgumentError`, Python raises `ValueError` |
+| `estimate_cost` guard: `return nil unless tokens[:input] && tokens[:output]` | **`is None`, not truthiness** — a genuine `0` token count is truthy in Ruby, falsy in Python. Same class of bug as step 03's `estimate_cost` |
+
+> ⚠️ **`task.task_name` is a method call in Python, an attribute-style call in
+> Ruby.** Ruby's `task&.respond_to?(:task_name) ? task.task_name : task&.to_s`
+> returns the string. The literal Python transcription
+> `task.task_name if hasattr(task, "task_name") else ...` returns a **bound
+> method object**, which `json.dumps` then raises `TypeError` on. It must be
+> `task.task_name()`. `Tasks::Player.task_name` is a `classmethod` in Python, so
+> `hasattr` is `True` and the bug is reached on the very first `response` event.
+> Expected value in the log: `"player"`.
+
+### ✏️ Edit — `boukensha/agent.py`
+
+| Ruby | Python |
+|---|---|
+| `logger: Logger.new` default arg | `logger=None` in the signature, `self.logger = logger or Logger()` in the body — Python evaluates defaults once at def-time, so a literal `logger=Logger()` would share one file handle across every Agent ever constructed |
+| `puts "[iteration …]"` | `self.logger.iteration(n=…, max=…)` — **the print is deleted, not kept alongside** |
+| `puts "  tool call → …"` / `"  tool result → …"` | `self.logger.tool_call(...)` / `.tool_result(...)`; both prints deleted |
+| `@logger.limit_reached(...)` before `wrap_up` | same, before the `_wrap_up` return |
+| `@logger.prompt(messages:, tools:)` after incrementing | same |
+| `@logger.raw(data: response)` after the call | same |
+| `handle_tool_calls(parsed[:content], response)` | `_handle_tool_calls(content, response)` — the raw response is threaded through so the assistant turn can be logged with its usage |
+| `rescue StandardError => e` around `dispatch` | `except Exception as e:` — result becomes `f"ERROR: {type(e).__name__}: {e}"`, logged with `ok=False` |
+| `content.select { \|b\| b["type"] == "tool_use" }` hoisted to `tool_calls` | hoist it the same way; it is used twice (count in the log line, then the dispatch loop) |
+| `"(tool use — #{n} call#{'s' if n != 1})"` | `f"(tool use — {n} call{'s' if n != 1 else ''})"` — **em dash, and the pluralization inverts**: Ruby's `'s' if n != 1` yields `nil` (empty) when false, Python's conditional expression needs the explicit `else ""` |
+| `normalized_usage(response)` | guarded `.get` walk: `usage` → `usageMetadata` → a dict built from `prompt_eval_count` / `eval_count` if present → `None` |
+
+`log_response` is called from three places: the `end_turn` branch, the tool-use
+branch, and `wrap_up`. `turn_end` is logged from **four**: `end_turn`
+(`reason="completed"`), `wrap_up`'s success path, and `wrap_up`'s `ApiError`
+path (which logs `turn_end` but **not** `log_response`, since there is no
+response). Ruby's `rescue` wraps the whole method body; Python's existing `try`
+wraps only the call and parse. Keep the narrower `try`, but make sure both exit
+paths log `turn_end` with the limit reason, not `"completed"`.
+
+`wrap_up` still runs **outside** the counted loop and still does not increment
+`iteration` — the logged `iterations` value is therefore the count of *work*
+iterations, which is why the real log shows `"iterations": 2` for a two-call run.
+
+### ✏️ Edit — `boukensha/__init__.py`
+
+Add the module-level runtime state (see **OQ 1** for placement) and export
+`Logger`. Remove `LoopError` from both the import and `__all__`.
+
+| Ruby | Python (recommended naming — see **OQ 2**) |
+|---|---|
+| `Boukensha.config` (memoized `@config ||= Config.new`) | `config()` over a module-level `_config = None` |
+| `Boukensha.quiet!` / `loud!` / `quiet?` | `set_quiet()` / `set_loud()` / `is_quiet()` |
+| `Boukensha.debug!` / `debug?` | `set_debug()` / `is_debug()` |
+
+### ✏️ Edit — `boukensha/config.py`
+
+Delete the `mud_host` / `mud_port` / `mud_username` / `mud_password` properties
+(lines 39–52). Nothing in the Python tree reads them (`grep` confirms:
+definitions only). Leave `dig` — it is still used by `tasks/base.py`.
+
+### ✏️ Edit — `boukensha/errors.py`
+
+Delete `LoopError` and its docstring.
+
+### ✏️ Edit — `examples/example.py`
+
+Add the logger and pass it to the agent, mirroring Ruby's placement (after
+`client`, before `Agent(...)`), including both comment lines. Banner becomes
+`=== BOUKENSHA Step 6: The Logger ===`. Everything else is unchanged from step
+05 — same prompt string, same two tools, same `base_dir` sandbox.
+
+Note Ruby never calls `logger.close`; the process exit handles it, and every
+write is flushed. Python matches — do not add a `close()` the Ruby lacks.
+
+### ➕ Add — the launcher
+
+`week1_baseline/bin/python/06_the_logger` — copy of `bin/python/05_agent_loop`
+with both path segments changed; `chmod +x`.
+
+### ✏️ Edit — `README.md`
+
+Adapt to step 06, documenting: the timestamp precision trap, the
+`task.task_name()` call trap, the selective-`compact` asymmetry, the mutable
+default-argument trap on both `snapshot` and `logger`, key ordering as part of
+the output contract, the `is None` guard in `estimate_cost`, and whatever OQ 1–3
+land on. State plainly that `LoopError` was removed a step after being added.
+
+### ✅ Leave untouched
+
+`prompt_builder.py` (Python's `backend` is already public), `context.py`
+(whitespace-only in Ruby), `client.py`, `message.py`, `tool.py`, `registry.py`,
+all five backends, `tasks/`, `prompts/system.md`, `requirements.txt`.
+
+---
+
+## Verification
+
+**The stdout gate is now nearly the whole of stdout.** With every `puts` removed
+from the agent, the example prints only the 8-line header, a blank line, the
+`=== FINAL RESPONSE ===` marker, and the model's text. That makes the prefix
+diff *stronger* than in steps 04–05 — but it no longer covers the step's actual
+subject. The JSONL is the deliverable, so gate on that.
+
+1. **Deterministic-prefix diff — first 8 lines:**
+   ```sh
+   diff <(./week1_baseline/bin/ruby/06_the_logger | head -8) \
+        <(./week1_baseline/bin/python/06_the_logger | head -8)
+   ```
+   Expected:
+   ```
+   === BOUKENSHA Step 6: The Logger ===
+
+   Config: #<Boukensha::Config dir=<repo>/.boukensha tasks=player>
+   Provider: anthropic
+   Model: claude-haiku-4-5
+   Max iterations: 25
+   Max output tokens: 1024
+
+   ```
+
+2. **JSONL structural diff — the real gate.** Run both languages once, then
+   compare the two newest session files with the volatile fields normalized
+   (`session_id`, `at`, token counts, `cost_usd`, and all free text). Assert
+   identical: the **phase sequence**, the **key list and key order** of every
+   event, and the JSON separator style. A ~15-line scratchpad script; this is
+   what actually proves the port.
+
+3. **Offline logger unit checks** — no network, fully deterministic:
+   - `session_start` is written by the constructor, before any other call, and
+     carries the `snapshot` keys merged after `phase`;
+   - `at` matches `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$` —
+     **no fractional seconds**;
+   - session id matches `^\d{8}T\d{6}Z-[0-9a-f]{8}$`;
+   - `tool_result` with no error still emits `"error":null`; `turn_end` with no
+     tokens still emits `"tokens":null`;
+   - the `response` event drops nil metadata keys (the `.compact` asymmetry);
+   - `json.dumps` output contains no `", "` or `": "` — a direct separator check;
+   - `raw` writes nothing until `set_debug()`, then writes a `raw` event;
+   - `task` serializes as `"player"`, not a bound-method repr;
+   - `provider_name` over all five backend classes gives
+     `anthropic` / `open_ai` / `gemini` / `ollama` / `ollama_cloud`;
+   - `estimate_cost` with `input_tokens=0` returns a cost, not `None`.
+
+4. **Offline loop-integration check** with the step-05 stub client, asserting the
+   *event sequence* rather than any text:
+   - normal completion → `session_start, iteration, prompt, response, tool_call,
+     tool_result, iteration, prompt, response, turn_end(reason="completed")`;
+   - a tool that raises → `tool_result` with `ok=false` and a populated `error`,
+     and the loop continues rather than propagating;
+   - hitting `max_iterations` → `limit_reached` immediately before the single
+     wind-down `response`, then `turn_end(reason="max_iterations")`;
+   - `wrap_up` raising `ApiError` → `turn_end` still logged, no `response` event.
+
+5. **Live smoke test, once.** Both languages, exit `0`, a session file created in
+   `.boukensha/sessions/`, and `log_viz` renders both without error. Do not diff
+   the response bodies.
+
+6. `grep -rn "isoformat()" week1_baseline/python/06_the_logger --include='*.py'`
+   returns only `timespec="seconds"` forms — a direct check for trap 1.
+
+---
+
+## Open Questions
+
+1. **Where does the module-level state live, given the import cycle?**
+   `logger.py` needs `Boukensha.config` and `Boukensha.debug?`. Putting those in
+   `__init__.py` — the literal transcription of `boukensha.rb` — means
+   `__init__` imports `logger`, and `logger` imports `__init__`. Ruby has no
+   equivalent problem because `Boukensha.config` is resolved at call time.
+   Options: (a) a deferred `import boukensha` inside the two methods that need
+   it; (b) a small `boukensha/runtime.py` holding the state, imported by
+   `logger.py` directly and re-exported from `__init__.py`.
+   *Recommend:* **(b)**. It is a real module rather than a trick, keeps
+   `logger.py` readable, and the re-export means `boukensha.config()` still works
+   for callers exactly as `Boukensha.config` does in Ruby. The cost is one file
+   Ruby does not have — worth documenting in the README as a language-forced
+   divergence rather than a design change.
+
+2. **How should `quiet!` / `quiet?` be named in Python?** Ruby's `!`/`?` suffixes
+   have no Python equivalent, and this is the first step to hit them, so whatever
+   is chosen here sets the convention for the rest of the port.
+   *Recommend:* `set_quiet()` / `set_loud()` / `is_quiet()` / `set_debug()` /
+   `is_debug()`. Verb-prefixed setters and `is_`-prefixed predicates are
+   unambiguous at the call site, which a bare `quiet()` would not be. Rejected
+   alternatives: `quiet()`/`quiet_p()` (`_p` is Lisp, not Python) and module-level
+   properties (not supported without a module `__class__` hack).
+
+3. **Should `example.py` demonstrate `set_debug()`?** Ruby's example only
+   *mentions* it in a comment; enabling it would write full raw API responses
+   into the session log.
+   *Recommend:* match Ruby — comment only, left off. Turning it on would make the
+   two languages' logs diverge in size by orders of magnitude and would make
+   verification step 2 harder for no gain. Worth a README line showing how to
+   enable it.
+
+4. **Does `bin/python/06_the_logger` need the `BOUKENSHA_DIR` guard, or does
+   `example.py` carry it?** Ruby carries it in `example.rb` line 1.
+   *Recommend:* keep it in `example.py`, mirroring Ruby, so running the example
+   directly (without the launcher) still targets the repo-root `.boukensha`.
+   The launcher stays a two-line `cd` + `python`, as in steps 00–05.

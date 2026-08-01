@@ -1,0 +1,371 @@
+# Port Plan — Step 07: The Run DSL (Ruby → Python)
+
+Port `Boukensha.run` — the single entry point that wires Config, Context,
+Registry, backend, PromptBuilder, Client, Logger and Agent together — plus the
+tiny `RunDSL` block object that registers tools inside it.
+
+This is the eighth of thirteen steps (`00_config` → `12_context`).
+
+> **`run_dsl.rb` is 13 lines. That is not the step.** The step is the ~80-line
+> `Boukensha.run` added to `lib/boukensha.rb`, which collapses the 92-line
+> example down to 34. Budget accordingly.
+
+> ⚠️ **Step 07 is not a linear continuation of step 06.** Three things step 06
+> *deleted* are back, in their pre-06 form: `LoopError`, `Config`'s four `mud_*`
+> readers, and `context.rb`'s misaligned assignments. `07/errors.rb` is
+> byte-identical to `05/errors.rb`, and `07/config.rb` restores the four-line
+> `mud_*` bodies that step 05 had rewritten as endless methods — while also
+> reverting step 06's `@dir =` alignment and its one-line `load_env` guard. The
+> evidence says step 07 was branched from around step 04/05 rather than from
+> step 06. **Mirror it anyway** (standing rule: never edit the Ruby), but see
+> **OQ 4** — this changes what "surface parity" is worth.
+
+---
+
+## Starting state
+
+⚠️ **`week1_baseline/python/07_the_run_dsl/` does not exist yet.** Every previous
+step in this series began with the copy already made; this one does not. First
+action:
+
+```sh
+cp -r week1_baseline/python/06_the_logger week1_baseline/python/07_the_run_dsl
+rm -rf week1_baseline/python/07_the_run_dsl/boukensha/__pycache__ \
+       week1_baseline/python/07_the_run_dsl/boukensha/*/__pycache__
+diff -rq --exclude=__pycache__ week1_baseline/python/06_the_logger \
+                                week1_baseline/python/07_the_run_dsl   # must be empty
+```
+
+The repo-root `.venv/` needs no new packages. `requirements.txt` is unchanged
+from 00–06.
+
+`week1_baseline/bin/ruby/07_the_run_dsl` exists and runs.
+`bin/python/07_the_run_dsl` does **not** exist yet.
+
+Live config consumed (do not modify): repo-root `.boukensha/`. As always,
+`example.py` must set `BOUKENSHA_DIR` to the repo root, matching `example.rb`
+line 1 — otherwise the two languages log to different directories.
+
+---
+
+## Decisions (carried over — settled, do not re-litigate)
+
+- **One shared `.venv/` at the repo root**; `pip` + `requirements.txt`.
+- **Self-contained snapshot per step** — duplication is intentional.
+- **`@dataclass` for value objects**, plain classes for things with behaviour.
+- **Ruby blocks become Python decorators** — settled in step 02 for
+  `@registry.tool(...)`. `RunDSL#tool` is the same shape, so it becomes
+  `@dsl.tool(...)`. See **OQ 1**.
+- **Backends reached as `backends.Anthropic`** via the subpackage.
+- **`urllib.request`, never `requests`.**
+- **Python's `PROMPTS_DIR` stays correct** (`parents[1]`).
+- **`json.dumps` always with `separators=(",", ":")` and `ensure_ascii=False`.**
+- **Ruby's `!`/`?` map to `set_`/`is_`** — settled in step 06.
+- **Module-level state lives in `runtime.py`, re-exported from `__init__.py`** —
+  settled in step 06 to avoid the import cycle.
+- **No test framework** — the example is the smoke test; scratch verification
+  lives in the scratchpad.
+- **Mirror Ruby's bugs and document them; never edit the Ruby side.**
+
+---
+
+## What Ruby changed between step 06 and step 07
+
+Confirmed by `diff -ru ruby/06_the_logger ruby/07_the_run_dsl --exclude=Gemfile.lock`:
+
+| Change | Ruby | Python action |
+|---|---|---|
+| **New** `lib/boukensha/run_dsl.rb` | `RunDSL` — 13 lines, one `tool` method | **Port** (see OQ 1) |
+| `lib/boukensha.rb` | `+Boukensha.run` (~80 lines); `+require run_dsl` | **Port** (see OQ 2) — the real work |
+| `lib/boukensha/logger.rb` | `+turn(n:)`, `+subscribe(&block)`; `write_log` notifies subscribers | **Port** (see OQ 3) |
+| `lib/boukensha/errors.rb` | **Restores** `LoopError` | **Re-add** (see OQ 4) |
+| `lib/boukensha/config.rb` | **Restores** `mud_host` / `mud_port` / `mud_username` / `mud_password`; `load_env` guard back to a multi-line `if`; `@dir =` alignment reverted | **Re-add the four properties.** The other two hunks are style-only |
+| `lib/boukensha/context.rb` | Whitespace + a lost trailing newline | **None** |
+| `examples/example.rb` | 92 lines → 34; everything moves inside `Boukensha.run` | **Port** |
+| `README.md` | Rewritten for the DSL | **Adapt** |
+
+`agent.py`, `client.py`, `prompt_builder.py`, all five backends, `tasks/*`,
+`tool.py`, `message.py`, `registry.py`, `prompts/system.md` are untouched.
+
+> ⚠️ **`turn(n:)` and `subscribe` are both dead code in step 07.** Nothing calls
+> either — `agent.rb` only ever calls `turn_end`. `log_viz`'s parser already
+> handles a `turn` phase, and the TUI step is the obvious consumer of
+> `subscribe`, so both are groundwork for later steps.
+
+> ⚠️ **`LoopError` and `mud_*` are still unused after being restored.** `grep`
+> over `07/lib` and `07/examples` finds no raise, rescue, or reader call for any
+> of them.
+
+> ⚠️ **The Ruby step-07 README is stale in three ways.** Its title says
+> **"Step 6 — The Boukensha.run DSL"**. And the `Boukensha.run` doc comment in
+> `boukensha.rb` is wrong about its own defaults: it claims `system:` defaults to
+> `config.system_prompt` and `model:` to `config.model`, but `Config` in step 07
+> exposes only `dir` and `settings` — both actually come from `Tasks::Player`.
+> It also says `backend:` defaults to `:anthropic`, when the code defaults to
+> `task_class.provider(task_settings).to_sym`, i.e. whatever `settings.yaml`
+> says. **Take the defaults from the code.**
+
+---
+
+## Read before writing
+
+| Ruby source (read this) | Purpose |
+|---|---|
+| `ruby/07_the_run_dsl/lib/boukensha.rb` | **`Boukensha.run`** — the whole step |
+| `ruby/07_the_run_dsl/lib/boukensha/run_dsl.rb` | 13 lines; read in full |
+| `ruby/07_the_run_dsl/lib/boukensha/logger.rb` | The two added methods only — diff against 06 |
+| `ruby/07_the_run_dsl/examples/example.rb` | The example to reproduce |
+
+Reference: `.boukensha/sessions/*.jsonl` from the step-06 runs, for the wire
+format the logger still has to produce.
+
+---
+
+## The work — a checklist over the new folder
+
+### ➕ Add — `boukensha/run_dsl.py`
+
+The whole class, mirroring Ruby's 13 lines:
+
+| Ruby | Python |
+|---|---|
+| `RunDSL#initialize(registry)` | `def __init__(self, registry)` |
+| `tool(name, description:, parameters: {}, &block)` | `def tool(self, name, *, description, parameters=None)` returning a decorator |
+| delegates to `@registry.tool(...)` | `return self.registry.tool(name, description=description, parameters=parameters)` |
+
+`Registry.tool` already returns a decorator (`register`), so `RunDSL.tool` is a
+one-line passthrough and `@dsl.tool(...)` works exactly like `@registry.tool(...)`.
+Keep the surface to `tool` alone — Ruby's comment is explicit that the small
+surface is the point.
+
+### ➕ Add — `boukensha/run.py`
+
+`Boukensha.run` ported as a module-level `run(...)`. See **OQ 2** for why it is
+its own module rather than `__init__.py`.
+
+| Ruby | Python |
+|---|---|
+| `def self.run(task:, system: nil, model: nil, backend: nil, api_key: nil, ollama_host: "http://localhost:11434", log: nil, max_output_tokens: nil, &block)` | `def run(*, task, system=None, model=None, backend=None, api_key=None, ollama_host="http://localhost:11434", log=None, max_output_tokens=None, tools=None)` |
+| `cfg = config` | `cfg = runtime.config()` — memoized, and the call that loads `.env` into the environment |
+| `task_class = Tasks::Player` | `task_class = Player` |
+| `cfg.tasks(task_class.task_name)` | `cfg.tasks(task_class.task_name())` — **call it**, same trap as step 06's logger |
+| `backend ||= task_class.provider(task_settings).to_sym` | keep it a **string**; Python has no symbols and every existing comparison is string-based |
+| `api_key ||= case backend …` | a dict lookup `{"anthropic": "ANTHROPIC_API_KEY", …}.get(backend)` into `os.environ.get(...)`; `ollama` is absent from the table and stays `None` |
+| `RunDSL.new(registry).instance_eval(&block) if block` | `tools(RunDSL(registry))` if `tools` — see **OQ 1** |
+| `case backend … else raise ArgumentError` | if/elif chain ending in `raise ValueError`, message wording matched |
+| `Ollama.new(host: ollama_host, model: model)` | `backends.Ollama(host=ollama_host, model=model)` — Python's `Ollama.__init__` already takes `host` |
+| `logger&.close` in `ensure` | `try/finally` with `logger = None` initialized **before** the `try` — Ruby defines the local at parse time, Python raises `UnboundLocalError` |
+| `ctx.add_message(:user, task)` then `agent.run` | `ctx.add_message("user", task)` then `return agent.run()` |
+
+The `logger` snapshot is new and matters — it is what `log_viz` reads for its
+denominators:
+
+```python
+snapshot = {
+    "task": task_class.task_name(),
+    "max_iterations": effective_max_iterations,
+    "max_output_tokens": effective_max_output_tokens,
+    "model": model,
+    "provider": backend,
+}
+```
+
+Key order must match Ruby's. Note what is **absent**: `max_turn_tokens` and
+`context_window`. `log_viz` will therefore render the iterations bar for
+step-07 logs but still skip the peak-context and largest-turn bars — expected,
+not a regression. (Those keys arrive with the `.run` DSL in step 12.)
+
+> ⚠️ **`max_output_tokens` is resolved once and used twice.** Ruby computes
+> `effective_max_output_tokens = max_output_tokens || task_class.max_output_tokens(task_settings)`
+> and passes it to *both* the logger snapshot and `Agent`. Ruby's `||` here is a
+> truthiness test, so an explicit `max_output_tokens: 0` would fall through to
+> the task default — Python's `if max_output_tokens is None` would not. **This
+> one is the reverse of the usual trap:** the faithful port of Ruby's behaviour
+> is `or`, not `is None`. Recommend matching Ruby with `or` and noting it,
+> because `Agent._call_opts` already guards `0` correctly one layer down and
+> diverging here would make the two languages disagree. Flag it in the README.
+
+### ✏️ Edit — `boukensha/logger.py`
+
+Add two methods, in Ruby's positions:
+
+| Ruby | Python |
+|---|---|
+| `turn(n:)` — before `iteration` | `def turn(self, *, n)` writing `{"phase": "turn", "n": n}` |
+| `subscribe(&block)` — after `raw`, before `close` | `def subscribe(self, callback)` appending to a lazily-created list |
+| `@subscribers&.each { \|s\| s.call(event) }` at the end of `write_log` | same, **after** the write and flush — subscribers must not be able to prevent the line landing on disk |
+
+Ruby lazily initializes `@subscribers ||= []` inside `subscribe`; Python should
+initialize `self._subscribers = []` in `__init__` instead. Ruby's lazy form
+exists because an uninitialized ivar is `nil` rather than an error; Python has
+no such excuse, and `write_log` already has to handle the empty case.
+
+### ✏️ Edit — `boukensha/config.py`
+
+Re-add the four `mud_*` properties, in the position and order step 06 removed
+them from (after `user_prompts_dir`, before the `dig` helper), with the same
+defaults: `"localhost"` and `4000` via `or`, username and password unguarded.
+
+### ✏️ Edit — `boukensha/errors.py`
+
+Re-add `LoopError` between `ApiError` and `UnsupportedModelError`. Docstring
+should say plainly that it is declared and never raised — and that it was
+removed in step 06 and restored here.
+
+### ✏️ Edit — `boukensha/__init__.py`
+
+Export `run`, `RunDSL`, and `LoopError`. Import `run` **last**, after `Agent` —
+it depends on nearly everything else.
+
+### ✏️ Edit — `examples/example.py`
+
+This is the step's payoff: 92 lines to ~34. Everything between `Config()` and
+`agent.run()` disappears.
+
+| Ruby (07 example) | Python |
+|---|---|
+| the three explanatory comment lines | same wording |
+| `puts "=== BOUKENSHA Step 7: The Boukensha.run DSL ==="` | same |
+| `puts "Config: #{Boukensha.config}"` | `print(f"Config: {boukensha.config()}")` — note it is now the **memoized module-level** config, not a fresh `Config()` |
+| `base_dir = File.expand_path("..", __dir__)` | `base_dir = Path(__file__).resolve().parents[1]` — unchanged from 05/06 |
+| `Boukensha.run(task: "…") do … end` | `boukensha.run(task="…", tools=define_tools)` — see **OQ 1** |
+| `tool "read_file", description:, parameters: do \|path:\| … end` | `@dsl.tool("read_file", description=…, parameters=…)` |
+| `result` printed under `=== FINAL RESPONSE ===` | same |
+
+The `Max iterations:` / `Max output tokens:` / `Provider:` / `Model:` lines from
+step 06's header are **gone** — Ruby dropped them. Do not keep them.
+
+### ➕ Add — the launcher
+
+`week1_baseline/bin/python/07_the_run_dsl` — copy of `bin/python/06_the_logger`
+with both path segments changed; `chmod +x`.
+
+### ✏️ Edit — `README.md`
+
+Adapt to step 07, documenting: the `instance_eval` → explicit-DSL-argument
+decision and why (OQ 1), where `run` lives and why (OQ 2), the `or`-not-`is None`
+inversion on `max_output_tokens`, `turn`/`subscribe`/`LoopError`/`mud_*` all
+being dead code, and the step-06-deletions-restored oddity with what it implies
+about the Ruby steps not being linear. Note the stale Ruby title and the wrong
+doc-comment defaults.
+
+### ✅ Leave untouched
+
+`agent.py`, `client.py`, `prompt_builder.py`, `context.py`, `message.py`,
+`tool.py`, `registry.py`, `runtime.py`, all five backends, `tasks/`,
+`prompts/system.md`, `requirements.txt`.
+
+---
+
+## Verification
+
+The stdout surface is smaller than ever — a 4-line header, then non-deterministic
+model output. The JSONL remains the real artifact, and the step-06 harness
+carries over almost unchanged.
+
+1. **Deterministic-prefix diff — first 4 lines:**
+   ```sh
+   diff <(./week1_baseline/bin/ruby/07_the_run_dsl | head -4) \
+        <(./week1_baseline/bin/python/07_the_run_dsl | head -4)
+   ```
+   Expected:
+   ```
+   === BOUKENSHA Step 7: The Boukensha.run DSL ===
+
+   Config: #<Boukensha::Config dir=<repo>/.boukensha tasks=player>
+
+   ```
+
+2. **JSONL structural diff** — reuse `jsonl_diff.py` from step 06 unchanged. It
+   already compares phase sequence, key list and key order per event. The new
+   assertion for this step: `session_start` now carries
+   `task`/`max_iterations`/`max_output_tokens`/`model`/`provider` **in that
+   order**, where step 06's was bare.
+
+3. **Offline `run()` wiring checks** — the parts that do not need the network.
+   Monkeypatch `Client.call` (or inject a stub via the same seam the step-06
+   loop tests used) and assert:
+   - `tools=` callable receives a `RunDSL` and its `@dsl.tool` registrations
+     land in the `Context` that `run` builds;
+   - omitting `tools=` is legal and yields a zero-tool run;
+   - `backend="anthropic"|"openai"|"gemini"|"ollama"|"ollama_cloud"` each
+     construct the right backend class, and `ollama` needs **no** API key;
+   - an unknown backend raises `ValueError` with Ruby's message wording;
+   - `api_key=` explicit beats the environment variable;
+   - `model=` / `system=` explicit beat the task settings;
+   - `log=` overrides the session path;
+   - the logger is **closed** on both the success path and when `agent.run()`
+     raises (the `try/finally`);
+   - `max_output_tokens=0` falls through to the task default — matching Ruby's
+     `||`, and deliberately unlike `Agent._call_opts`.
+
+4. **Offline logger checks** — extend step 06's `check_logger.py`:
+   - `turn(n=1)` writes `{"phase":"turn","n":1,…}`;
+   - a subscriber added via `subscribe` receives every event, **in order**, and
+     receives them *after* the line is on disk;
+   - multiple subscribers all fire; zero subscribers is not an error.
+
+5. **Live smoke test, once.** Both exit `0`, both write a session file, and
+   `log_viz` renders both — now with the iterations bar populated, since
+   `max_iterations` is in the snapshot for the first time.
+
+6. `grep -rn "instance_eval\|LoopError" week1_baseline/python/07_the_run_dsl --include='*.py'`
+   returns only the `errors.py` declaration and its docstring.
+
+---
+
+## Open Questions
+
+1. **How does a Python caller register tools inside `run`?** Ruby uses
+   `RunDSL.new(registry).instance_eval(&block)`, which rebinds `self` so a bare
+   `tool "read_file"` resolves against the DSL object. Python has no
+   `instance_eval` and no way to rebind a function's name resolution.
+   Options: (a) `run(..., tools=callable)` where the callable receives the
+   `RunDSL`; (b) a `with boukensha.session(...) as dsl:` context manager, with
+   the result read off the object afterwards; (c) pass a pre-built `Registry`
+   and drop `RunDSL` entirely.
+   *Recommend:* **(a)**. It keeps `RunDSL` (so the Ruby surface still maps
+   1:1), keeps `@dsl.tool(...)` identical in shape to the `@registry.tool(...)`
+   decorator settled in step 02, and stays a single expression:
+   ```python
+   def define_tools(dsl):
+       @dsl.tool("read_file", description="…", parameters={…})
+       def read_file(path):
+           return (base_dir / path).read_text()
+
+   result = boukensha.run(task="…", tools=define_tools)
+   ```
+   (b) changes the call shape enough that step 08's REPL would inherit the
+   awkwardness; (c) throws away the step's actual subject. The cost of (a) is
+   one named function where Ruby has an anonymous block — worth documenting as a
+   language-forced divergence, not a design change.
+
+2. **Where does `run()` live?** Ruby puts it directly in `module Boukensha`.
+   The literal Python equivalent is a function in `__init__.py`; that would
+   actually work here (no cycle, since `run` is defined after every import and
+   nothing imports `__init__`), but it puts ~60 lines of wiring in a file that
+   is otherwise a manifest.
+   *Recommend:* **`boukensha/run.py`, imported last in `__init__.py`**,
+   consistent with the `runtime.py` decision from step 06. Callers still write
+   `boukensha.run(...)`, exactly matching Ruby's `Boukensha.run(...)`.
+
+3. **Port `turn(n:)` and `subscribe` even though nothing calls them?**
+   *Recommend:* port both. `subscribe` is a real behaviour change to `write_log`
+   (subscribers fire on every event), so omitting it would make step 08's or 11's
+   diff misleading; and `log_viz` already parses a `turn` phase, so the reader
+   side is waiting for it. Document both as unused-in-this-step, as done for
+   `quiet` in step 06.
+
+4. **Re-add `LoopError` and `mud_*`, given step 06 deleted them one step ago?**
+   The Ruby evidence is that step 07 was branched from before step 06 rather
+   than from it. Following it literally means the Python `errors.py` and
+   `config.py` churn back and forth across three steps for no behavioural reason.
+   *Recommend:* **re-add them, mirroring Ruby.** The standing rule is that the
+   Ruby is the spec and divergences get documented, not silently corrected — and
+   a Python tree that stays "ahead" of the Ruby would make every subsequent diff
+   harder to read. But record the churn explicitly in the README and the journal:
+   the useful lesson is that these step folders are independent snapshots, so
+   *"what changed between N and N+1"* is not always *"what the author intended to
+   change"*. If you would rather Python hold the step-06 state and skip the
+   restoration, say so — it is defensible, but it is a deliberate break from the
+   mirror rule and should be decided once, out loud, rather than per file.

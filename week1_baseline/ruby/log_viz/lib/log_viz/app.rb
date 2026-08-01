@@ -7,8 +7,13 @@ require_relative "ansi"
 module LogViz
   class App < Sinatra::Base
     set :root, File.expand_path("../..", __dir__)
+    # Falls back to the same directory the agent logs into: BOUKENSHA_DIR when
+    # set (what the examples do), otherwise the repo-root .boukensha.
     set :sessions_dir, ENV.fetch("LOG_VIZ_SESSIONS_DIR") {
-      File.expand_path("../../../../.boukensha/sessions", __dir__)
+      boukensha_dir = ENV.fetch("BOUKENSHA_DIR") {
+        File.expand_path("../../../../../.boukensha", __dir__)
+      }
+      File.join(File.expand_path(boukensha_dir), "sessions")
     }
 
     helpers do

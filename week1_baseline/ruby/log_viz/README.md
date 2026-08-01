@@ -32,9 +32,13 @@ Then open <http://localhost:4567>.
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `LOG_VIZ_SESSIONS_DIR` | `<repo root>/.boukensha/sessions` | Directory of `.jsonl` session logs to read |
+| `LOG_VIZ_SESSIONS_DIR` | `$BOUKENSHA_DIR/sessions` | Directory of `.jsonl` session logs to read |
+| `BOUKENSHA_DIR` | `<repo root>/.boukensha` | Used when `LOG_VIZ_SESSIONS_DIR` is unset, so the viewer follows wherever the agent is logging |
 | `PORT` | `4567` | Port to listen on |
 | `BIND` | `localhost` | Address to bind to |
+
+The examples set `BOUKENSHA_DIR` to `<repo root>/.boukensha` themselves, so with
+no configuration at all the viewer reads the logs those runs produce.
 
 ## How it works
 
