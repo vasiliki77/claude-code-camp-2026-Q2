@@ -12,24 +12,57 @@ Package BOUKENSHA as a gem so the `boukensha` command works from anywhere on you
 ## Install
 
 ```bash
-cd 08_global_executable
+cd 09_global_executable
 gem build boukensha.gemspec
-gem install boukensha-0.1.0.gem
+gem install boukensha-0.9.0.gem
 ```
 
 After that, `boukensha` is on your `$PATH` and works from any directory.
 
-## Switching steps with BOUKENSHA_PATH
+## Settings: BOUKENSHA_PATH and BOUKENSHA_DIR
 
-The loader resolves in this order:
+The loader owns two settings. Each resolves the same way and independently of
+the other: **env var → `~/.boukensharc` → built-in default.**
 
-| Priority | Source | Example |
-|----------|--------|---------|
-| 1 | `BOUKENSHA_PATH` env var | `BOUKENSHA_PATH=~/Sites/boukensha/07_the_repl_loop boukensha` |
-| 2 | `~/.boukensharc` file | `echo ~/Sites/boukensha/07_the_repl_loop > ~/.boukensharc` |
-| 3 | Bundled default | just run `boukensha` |
+| Setting | What it selects | Default |
+|---------|-----------------|---------|
+| `BOUKENSHA_PATH` | which step folder's lib to run | the lib bundled in the gem |
+| `BOUKENSHA_DIR` | config dir: `settings.yaml`, `.env`, `prompts/` | `~/.boukensha` |
 
-`BOUKENSHA_PATH` must point to a step folder that contains `lib/boukensha.rb`.
+`BOUKENSHA_PATH` must point to a step folder that contains `lib/boukensha.rb`;
+the loader aborts if it doesn't. `BOUKENSHA_DIR` is not checked — a config dir
+with no `settings.yaml` yet is a normal state, and `Boukensha::Config` treats it
+as empty.
+
+## ~/.boukensharc
+
+Permanent defaults for both, as `KEY=value` lines:
+
+```
+# Which step folder's lib the `boukensha` command loads.
+BOUKENSHA_PATH=~/Sites/boukensha/09_global_executable
+
+# Config dir: settings.yaml, .env, prompts/
+BOUKENSHA_DIR=~/Sites/boukensha/.boukensha
+```
+
+Blank lines and `#` comments are ignored. A line with no `=` is read as
+`BOUKENSHA_PATH`, so the original one-line format still works:
+
+```bash
+echo ~/Sites/boukensha/08_the_repl_loop > ~/.boukensharc
+```
+
+An env var always beats the rc file, per setting — so you can override just the
+config dir for one run and leave the step selection alone:
+
+```bash
+BOUKENSHA_DIR=~/projects/mybot/.boukensha boukensha
+```
+
+**The rc file is read by the *installed* gem's loader, not the step folder's.**
+After editing `lib/boukensha_loader.rb`, rebuild and reinstall for the change to
+take effect (see Install above).
 
 ## Running a specific step
 
@@ -45,9 +78,13 @@ BOUKENSHA_PATH=~/Sites/boukensha/06_the_run_dsl boukensha
 
 ## Debug mode
 
+Shows both resolved settings, so you can see which step and which config dir you
+actually got:
+
 ```bash
 BOUKENSHA_DEBUG=1 boukensha
 # => [boukensha] loading from: /path/to/step
+#    [boukensha] config dir:   /path/to/.boukensha
 ```
 
 ## The key idea
