@@ -1,0 +1,207 @@
+# Delta Plan — carrying step 10's MCP work into step 11 (TUI)
+
+Step 11 was branched from step 10 **before** 04-08-2026's MCP work, so it has no
+MCP client, no `mcp_servers` config, and the older single-line
+`~/.boukensharc` loader. This plan carries those forward.
+
+> **Most of it is a straight copy.** `registry.rb`, `config.rb` and
+> `boukensha_loader.rb` differ between the two steps **only** by the step-10
+> additions — step 11 has no competing changes in any of them. The real work is
+> confined to two files where step 11 *has* diverged on its own: `repl.rb`,
+> which was restructured to be driven by the TUI, and `boukensha.rb`, which
+> gained the `tui:` switch.
+
+This is a **floating artifact** remediation in the instructor's sense — code a
+step built that a later step's rewrite did not carry forward. `~/.boukensharc`
+support has now been carried by hand twice (09 → 10, and here). **Step 12 needs
+a sibling of this document**, which will be the fourth application.
+
+---
+
+## 1. Current state
+
+```
+                         step 10    step 11
+mcp/client.rb              ✓          ✗
+tools/mcp.rb               ✓          ✗
+Config#mcp_servers         ✓          ✗
+Registry#context reader    ✓          ✗
+loader: KEY=value rc       ✓          ✗   (still bare-path only)
+run/repl `mcp:` option     ✓          ✗
+tui.rb                     ✗          ✓   (324 lines)
+patches/bubbletea          ✗          ✓
+test/                      ✓          ✗
+version                  0.10.0     0.11.0
+```
+
+`context.rb`, `tools/mud.rb`, `tools/file_system.rb` and `tools/shell.rb` are
+**identical** across the two steps — nothing to do there.
+
+---
+
+## 2. Straight copies (no decisions)
+
+Step 11 has no divergence in any of these. Copy, adjusting nothing but the
+step's own version constant where it appears.
+
+| From step 10 | Notes |
+| --- | --- |
+| `lib/boukensha/mcp/client.rb` | verbatim (204 lines) |
+| `lib/boukensha/tools/mcp.rb` | verbatim (113 lines) |
+| `lib/boukensha/registry.rb` | the `attr_reader :context` block, 5 lines |
+| `lib/boukensha/config.rb` | `mcp_servers`, `normalize_server`, `fetch_either` |
+| `lib/boukensha_loader.rb` | the whole `RC_FILE` / `rc` / `parse_rc` / `apply_config_dir` rewrite, plus the `apply_config_dir` call in `load_and_start_repl` |
+| `examples/mcp_mud_demo.rb` | adjust the relative path to the daemon if the depth differs |
+
+`boukensha.rb` also gains, verbatim: `MUD_PREFIX`, `mud_env_from_config`,
+`mud_server_from_config`, `mcp_opts`, `register_all_mcp`, `close_mcp_clients`,
+and `require_relative "boukensha/tools/mcp"`.
+
+**Do not blind-copy `boukensha.rb` or `repl.rb` wholesale** — see §3 and §4.
+
+---
+
+## 3. `boukensha.rb` — additive, but hand-applied
+
+Step 11's `run` (line 40) and `repl` (line 116) already differ from step 10:
+`repl` carries a `tui: true` option and constructs the REPL into a local before
+deciding whether to wrap it:
+
+```ruby
+repl = Repl.new(..., mud: resolved_mud)
+if tui && defined?(Tui)
+  Tui.new(repl).start
+else
+  repl.start
+end
+```
+
+Apply by hand:
+
+- `mcp: nil` keyword on both `run` and `repl`
+- `mcp_clients = register_all_mcp(registry, mcp, cfg)` after the `Tools::Mud`
+  registration in both
+- `mcp: mcp_clients` passed into `Repl.new`
+- `close_mcp_clients(mcp_clients)` in both `ensure` blocks (lines 108 and 203),
+  after `logger&.close`
+
+**The `ensure` placement matters more here than in step 10.** A TUI takes over
+the terminal; if it exits by exception the MCP subprocesses must still be
+reaped, or the user is left with orphaned daemons *and* a garbled terminal.
+
+---
+
+## 4. `repl.rb` — the one file with a real conflict
+
+Step 11's `Repl` was restructured for the TUI and now has:
+
+- `attr_reader :logger, :context, :model, :version` — the TUI reads them
+- `@output_cb` / `on_output` instead of writing straight to stdout
+- a `start` reorganised around that callback
+- `banner` made public, because `Tui#start` calls `@repl.banner` (tui.rb:74)
+
+Step 10's change to this file — `mcp:` parameter, `@mcp`, the `mud_status_string`
+branch and `mcp_status_string` — is additive to *that* structure, but every hunk
+must be placed by hand. A three-way merge is not available; the surrounding code
+moved.
+
+Good news: because `Tui#start` renders `@repl.banner` into the conversation
+buffer, **the `mud:` line appears in the TUI for free** once `Repl` knows about
+`@mcp`. No TUI change is required for correctness.
+
+---
+
+## 5. The decision this plan exists to force: the TUI status bar
+
+`Tui#render_status` (tui.rb:170) draws a persistent bar:
+
+```
+ boukensha v0.11.0 · claude-haiku-4-5  ·  ctx 1.2k  ·  26 tools  ·  14:32:07
+```
+
+The tool count changes on its own when MCP registers 26 tools. **The route does
+not appear anywhere persistent.**
+
+Step 10 taught exactly this lesson the hard way: a banner that described the
+switched-off route read as "not configured" while 26 working tools sat in the
+registry, and that misleading signal was what exposed a *second*, silent bug.
+The TUI has the same exposure and worse ergonomics — the banner scrolls away
+after the first exchange, while the status bar is always on screen.
+
+| Option | Trade-off |
+| --- | --- |
+| **A. Leave it.** Banner only. | Zero TUI change. But the only persistent readout never says whether the MUD is in-process, over MCP, or absent — and the banner is gone within one screenful. |
+| **B. Add the route to the status bar** — `· mcp` or `· mud:direct`. | ~4 lines in `render_status`. The bar is width-constrained and already has five fields; something may need shortening on a narrow terminal. |
+| **C. Status bar shows connection health**, not just route. | Most useful, most work — needs the daemon polled or a cached last-known state. Out of scope here. |
+
+**Recommendation: B.** It is small, and the step-10 experience is direct
+evidence that the cost of an ambiguous status readout is measured in hours of
+misdiagnosis, not in pixels. Reuse `Repl#mud_status_string` rather than
+re-deriving — one source of truth for "which route is live".
+
+---
+
+## 6. Test plan
+
+Step 11 has **no `test/` directory at all**. Port step 10's two files
+(`test_tools_mcp.rb`, `test_config_mcp_servers.rb`, plus
+`test/support/tiny_mcp_server.rb`) with paths adjusted.
+
+**The strongest gate is free and cross-step:** step 11's tool table, registered
+over MCP, must be byte-identical to step 10's. Both drive the same
+`mud-manager` process, so any difference is a bug in the copy — the tools cannot
+have changed. Dump `name`, description, parameter types and enums as sorted JSON
+from both steps and `diff`. (Two traps, both already paid for once: sort the
+inner keys on *both* sides, and JSON-encode identically — Ruby emits raw UTF-8
+and two tool descriptions contain an em dash.)
+
+**Gate the plain REPL, not the TUI.** `tui: false` falls back to the terminal
+REPL, whose banner and built-in commands (`/help`, `/quiet`, `/loud`, `/clear`,
+`/exit`) never reach the model — the same free deterministic gate step 08
+established. A full-screen bubbletea app is not diffable; the fallback is.
+
+Manual: `ruby examples/mcp_mud_demo.rb --dry` must print the daemon info,
+26 `tbamud__` tools and `[dry run OK …]`, matching step 10's output exactly.
+
+---
+
+## 7. Risks
+
+1. **Step 11 needs nine charm/bubbletea gems that are not installed globally.**
+   The 02-08 journal entry records `boukensha` failing for steps 11 and 12 for
+   this reason. `bundle install` in the step folder is a prerequisite to running
+   *anything* here, and the launcher's `bundle check || bundle install` guard
+   covers `bin/ruby/11_tui` but not the global command.
+
+2. **`patches/bubbletea` is vendored.** Do not touch the `Gemfile` beyond what
+   is strictly needed; the patch directory suggests a pinned or locally-modified
+   dependency that a careless `bundle update` would disturb.
+
+3. **The installed gem is still 0.9.0/0.10.0.** Step 11's changes to
+   `boukensha_loader.rb` will not affect the global `boukensha` command until
+   `gem build && gem install` is run from step 11 — the third time this week
+   that "the artifact on disk is newer than the artifact executing" would cost
+   time if forgotten.
+
+4. **Two MUD routes registering the same 26 names.** `mcp_opts` returning
+   non-nil must force `mud: false`, exactly as in step 10, or the registry ends
+   up with one set silently overwriting the other and two live MUD connections.
+
+5. **Step 12 needs all of this again.** Four hand-applications of the same
+   loader change. If step 12 is also branched pre-MCP, consider whether the
+   remaining steps should be regenerated from step 11 rather than patched
+   independently — that is a bigger call than this plan should make, but it is
+   the question the repetition is asking.
+
+---
+
+## 8. Open questions
+
+1. **Status bar (§5)** — A, B, or C?
+2. **Does step 11 get tests, or does the suite live only in step 10?** Step 10
+   is the first Ruby step with one. Duplicating it per step matches the
+   snapshot-per-step convention but means N copies drifting; keeping it only in
+   step 10 means step 11's MCP path is unverified.
+3. **Version.** Step 11 is 0.11.0 and unaffected by this change on its face —
+   but it gains a capability, so a bump would be honest. Left alone unless the
+   step is rebuilt and reinstalled.

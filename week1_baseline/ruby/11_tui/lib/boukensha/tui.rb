@@ -174,8 +174,30 @@ module Boukensha
       tools = @context.tool_count
       clock = Time.now.strftime("%H:%M:%S")
 
-      bar = " boukensha v#{ver} · #{model}  ·  ctx #{used}  ·  #{tools} tools  ·  #{clock} "
+      bar = " boukensha v#{ver} · #{model}  ·  ctx #{used}  ·  #{tools} tools#{mud_route}  ·  #{clock} "
       lip(:white, bg: :bright_black).render(bar.ljust(@width))
+    end
+
+    # Which route the MUD tools arrived by, for the always-on status bar.
+    #
+    # The banner already says this in full, but it is rendered once into the
+    # conversation buffer and scrolls away within a screenful — after which the
+    # only persistent readout is a tool *count*, which cannot distinguish "26
+    # tools from a daemon" from "26 tools in-process" from "26 tools that are
+    # actually the filesystem ones". Step 10 spent real time on exactly that
+    # ambiguity: a status line that described the switched-off route read as
+    # "not configured" while 26 working tools sat in the registry.
+    #
+    # Derived from Repl, not re-computed here — one source of truth for which
+    # route is live.
+    def mud_route
+      status = @repl.mud_status_string
+
+      case status
+      when /over MCP/  then "  ·  mud:mcp"
+      when /not configured/ then ""
+      else "  ·  mud:direct"
+      end
     end
 
     def lip(fg = nil, bg: nil, bold: false)

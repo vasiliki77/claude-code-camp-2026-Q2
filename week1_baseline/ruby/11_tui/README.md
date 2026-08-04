@@ -81,10 +81,10 @@ gem build boukensha.gemspec
 gem install boukensha-0.11.0.gem
 
 # launches the charm TUI:
-BOUKENSHA_DIR=/home/andrew/Sites/Claude-Code-Camp/.boukensha BOUKENSHA_PATH=~/Sites/Claude-Code-Camp/week1_baseline/11_tui boukensha
+BOUKENSHA_DIR=/home/vasiliki/Projects/claude-code-camp-2026-Q2/.boukensha BOUKENSHA_PATH=/home/vasiliki/Projects/claude-code-camp-2026-Q2/week1_baseline/ruby/11_tui boukensha
 
 # plain REPL (no charm dependency required):
-BOUKENSHA_PATH=~/Sites/boukensha/11_tui boukensha --no-tui
+BOUKENSHA_PATH=/home/vasiliki/Projects/claude-code-camp-2026-Q2/week1_baseline/ruby/11_tui boukensha --no-tui
 ```
 
 ``sh

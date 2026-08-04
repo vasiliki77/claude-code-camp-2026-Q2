@@ -25,7 +25,7 @@ module Boukensha
 
     attr_reader :logger, :context, :model, :version
 
-    def initialize(context:, registry:, builder:, client:, logger:, config_dir: nil, provider: nil, model: nil, version: nil, api_key: nil, mud: nil, task_settings: nil, max_iterations: nil, max_output_tokens: nil)
+    def initialize(context:, registry:, builder:, client:, logger:, config_dir: nil, provider: nil, model: nil, version: nil, api_key: nil, mud: nil, mcp: nil, task_settings: nil, max_iterations: nil, max_output_tokens: nil)
       @context    = context
       @registry   = registry
       @builder    = builder
@@ -40,6 +40,7 @@ module Boukensha
       @version    = version
       @api_key    = api_key
       @mud        = mud
+      @mcp        = mcp
       @turn       = 0
       @output_cb  = nil
     end
@@ -153,7 +154,18 @@ module Boukensha
     # Build the mud status string shown in the banner.
     # Only checks TCP reachability — the tool session auto-connects at startup
     # (in Mud.register), so probing login here would cause a double-login.
-    def mud_status_string
+    #
+    # Public because the TUI's always-on status bar derives its route label from
+    # this — the same reason #banner is public. Keeping one source of truth for
+    # "which route is live" matters more here than the visibility: two places
+    # computing it is how a status line ends up disagreeing with reality.
+    public def mud_status_string
+      # The MCP path sets mud: false on purpose (the daemon owns the session, and
+      # registering Tools::Mud as well would open a second connection). Reporting
+      # "(not configured)" then would be actively wrong — the MUD tools are right
+      # there in the registry — so report the route instead.
+      return mcp_status_string unless Array(@mcp).empty?
+
       return "(not configured)" unless @mud
 
       host     = @mud[:host] || "localhost"
@@ -162,6 +174,18 @@ module Boukensha
       password = @mud[:password]
 
       "#{host}:#{port}  #{probe_mud(host, port, name, password)}"
+    end
+
+    # Servers have already handshaked by the time the banner prints
+    # (Tools::Mcp.register completes it), so this reports what is true rather
+    # than probing anything.
+    def mcp_status_string
+      names = Array(@mcp).map do |client|
+        info = client.server_info || {}
+        [info["name"] || "mcp", info["version"]].compact.join(" ")
+      end
+
+      "via #{names.join(', ')} (#{@context.tools.length} tools over MCP)"
     end
 
     def probe_mud(host, port, name, password)

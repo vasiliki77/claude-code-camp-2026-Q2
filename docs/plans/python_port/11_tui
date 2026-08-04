@@ -1,0 +1,287 @@
+# Port Plan — Step 11: A Terminal UI (Ruby → Python)
+
+Port the step-11 delta: `Boukensha.repl()` gains a `tui:` keyword (default
+`True`) that wraps the plain-text REPL in a full-screen terminal UI — a
+scrollable conversation viewport, a live progress line while the agent works, a
+single-line input box, and an always-on status bar.
+
+**The REPL keeps owning all session logic** — turn counting, slash commands,
+agent dispatch. The TUI only replaces how it reads input and writes output.
+
+> **This plan follows the instructor's `11_tui` Python port plan.** Its three
+> judgment calls are adopted verbatim (§3). What it does *not* carry is that
+> plan's assumptions about this repository's layout, which differ in five
+> concrete places — §2 lists them, because following the plan literally would
+> put code in the wrong files.
+
+---
+
+## 1. Starting state
+
+**`week1_baseline/python/11_tui/` does not exist.** The instructor's plan opens
+by stating the directory is already a verbatim copy of Python step 10, confirmed
+by `diff -rq`. That is true of their repo, not this one. **Step 0 is the copy:**
+
+```sh
+cp -r week1_baseline/python/10_standard_tool_library \
+      week1_baseline/python/11_tui
+diff -rq --exclude=__pycache__ \
+     week1_baseline/python/10_standard_tool_library \
+     week1_baseline/python/11_tui     # must be empty before starting
+```
+
+`week1_baseline/bin/python/11_tui` does not exist either.
+
+`textual` is **not installed** in the shared `.venv`. It is the only new
+dependency (`rich` comes in transitively).
+
+---
+
+## 2. Where the instructor's plan does not fit this repo
+
+Five divergences. Each is a place where following the plan literally would put
+code in a file that does not exist here, or under a name this repo does not use.
+
+| Instructor's plan says | This repo actually has | Consequence |
+| --- | --- | --- |
+| `boukensha/__init__.py`: `__version__ = "0.11.1"` | version lives in `boukensha/version.py` as `VERSION`, re-exported | **Bump `version.py`**, not `__init__.py`; the constant is `VERSION` |
+| Ruby step 11 is `0.11.1` | ours is **`0.11.0`** | target `0.11.0`, to match the Ruby step we actually have |
+| "Wire `tui=` into `boukensha/__init__.py`" | `run()` / `repl()` live in **`boukensha/run.py`**; `__init__.py` only re-exports | the wiring goes in `run.py`, inside `repl()` after `_build_session` |
+| `Repl` needs no visibility work ("Python attributes were public all along") | true for attributes, **false for methods**: `_banner` and `_mud_status` are underscore-private | rename `_banner` → `banner` and `_mud_status` → `mud_status_string` |
+| `self._repl.context.tool_count` | `tool_count` is a **method** in Python | call it: `tool_count()` |
+
+Everything else in the instructor's plan applies as written. `Logger.subscribe`
+(logger.py:102), `Context.tool_count` (context.py:31) and `Agent.MAX_ITERATIONS`
+are all present and already ported — nothing to do beyond consuming them.
+
+### One addition, from our Ruby step 11
+
+Our Ruby step 11 diverged from the instructor's after their plan was written:
+today's MCP delta added a **route label to the TUI status bar** —
+`· mud:mcp` / `· mud:direct` / nothing — derived from `Repl#mud_status_string`
+so there is one source of truth for which route is live.
+
+The reasoning carries directly: the banner is rendered once into the
+conversation buffer and scrolls away within a screenful, after which the only
+persistent readout is a tool *count*, which cannot distinguish "26 tools from a
+daemon" from "26 tools in-process". Step 10 spent real time on exactly that
+ambiguity.
+
+**Port it.** This is why `_mud_status` must become public (row 4 above).
+
+---
+
+## 3. Judgment calls (the instructor's — adopted, do not re-litigate)
+
+**1. `charm` (bubbletea/lipgloss/bubbles) → Textual.** No Python binding to
+Bubble Tea exists. Textual is the closest conceptual match to bubbletea's
+reactive model/update/view loop, is pure Python with no native per-platform
+build step, and ships a headless test harness (`App.run_test()` / `Pilot`) that
+the Ruby setup has no equivalent of.
+
+**2. `Thread#raise(Interrupt)` → cooperative cancellation.** Ruby's Esc handler
+injects an exception into the turn thread wherever it is, including
+mid-blocking-I/O. Python has no safe equivalent:
+`PyThreadState_SetAsyncExc` only fires when the thread next returns to Python
+bytecode, so it cannot cut short an HTTP call already in flight — it would take
+effect once the call returns anyway, which is too late to matter. Rather than
+ship a ctypes hack that *looks* like Ruby's behaviour and silently fails in the
+one case that matters, add an optional `cancel_event` (`threading.Event`) to
+`Agent`, checked at the top of each loop iteration, raising `TurnCancelled`.
+
+> **Accepted gap, to be stated in the README and in review:** Esc will not
+> interrupt a single in-flight backend call, only take effect at the next
+> iteration or tool-call boundary. A deliberate documented divergence, not a
+> missed port.
+
+**3. Where the TUI launches from.** Ruby reaches the interactive TUI only
+through the installed gem's `bin/boukensha` via `boukensha_loader.rb`, which
+this port has excluded since step 10 (no Python gem/loader concept). Every
+Python step's launcher runs `examples/example.py` directly, and since step 08
+that file calls `repl()` interactively. **Keep that convention:** fold
+`--no-tui` argv handling into `examples/example.py`, rather than inventing a
+Python `boukensha_loader` to host a CLI flag. A one-line divergence in *where*
+the flag is parsed, not in what it does.
+
+---
+
+## 4. The delta
+
+### 4.1 Version and dependency
+- `boukensha/version.py`: `VERSION = "0.11.0"`
+- `requirements.txt`: add `textual`; install into the shared `.venv`
+
+### 4.2 Refactor `Repl` for composability
+`boukensha/repl.py`:
+- `self._output_cb = None` in `__init__`; add `on_output(self, callback)`
+- private `_output(self, s)` — call `self._output_cb(str(s))` if set, else `print(s)`
+- extract the slash-command chain out of `start()` into a public
+  `handle_command(self, task)` returning `"quit"` / `"command"` / `None`,
+  emitting through `_output` (Goodbye, HELP, the quiet/loud/clear confirmations)
+- `_run_turn` → public `run_turn`; its `print()` calls at repl.py:197, 200, 205,
+  206 become `_output`
+- `_banner` → public `banner`; `_mud_status` → public `mud_status_string`
+- `start()`: banner through `_output`; print the literal `PROMPT` to stdout
+  **only when `self._output_cb is None`** (matching Ruby's `unless @output_cb` —
+  Textual drives its own input)
+
+### 4.3 Cooperative cancellation
+- `boukensha/errors.py`: add `TurnCancelled(Exception)`
+- `boukensha/agent.py`: `cancel_event=None` in `__init__`; at the top of the
+  `while True` loop, alongside `_iteration_limit_reached()`, raise
+  `TurnCancelled` if `self.cancel_event is not None and self.cancel_event.is_set()`
+- `Repl.run_turn`: build a fresh `threading.Event` per turn, expose it as
+  `self._cancel_event`, pass it to the `Agent`, catch `TurnCancelled` alongside
+  `LoopError`/`ApiError` and route `"(interrupted)"` through `_output`
+
+### 4.4 `boukensha/tui.py` — a Textual `App` wrapping `Repl`
+
+- **Layout** (`compose`): `RichLog(wrap=True, markup=True, auto_scroll=True)`
+  for the conversation; `Static` for the progress/idle line; `Input`
+  (single-line — Ruby pins its `TextArea` to `height = 1`, so `Input` is the
+  faithful match) with `placeholder="Type a message…"`; `Static` for the status bar.
+- **Startup** (`on_mount`): append `self._repl.banner` to the log; register
+  `self._repl.on_output(...)` and `self._repl.logger.subscribe(...)`; start
+  `set_interval(0.06, self._tick)` (Ruby's `TICK_MS = 60`).
+- **Event queue.** Both callbacks fire on the *background turn thread*, not
+  Textual's event loop. Mirror Ruby's `Queue` + drain-on-tick exactly: push onto
+  a `queue.Queue`, drain it in `_tick` with `get_nowait()`. This is not
+  style-parity — only the app's own event-loop thread may mutate widget state.
+- **Live progress state**: a plain dict (`spinner_idx`, `start_time`, `elapsed`,
+  `current_action`, `iteration`, `tool_call_count`, `turn_input_tokens`,
+  `turn_output_tokens`), rebuilt in `_launch_turn` like Ruby's `@live`. Rendered
+  each tick with the same 10-glyph Braille spinner; idle branch shows
+  `"[ready]  ctx <k>  <n> turns"`.
+- **Status bar**: `" boukensha v{version} · {model} · ctx {used} · {tools} tools{route} · {clock} "`,
+  justified to terminal width. `{tools}` is `self._repl.context.tool_count()`
+  — a method call here. `{route}` is the §2 addition, derived from
+  `self._repl.mud_status_string()`.
+- **Keybindings** (`BINDINGS` + `on_input_submitted`):
+  `ctrl+c`/`ctrl+d` → `self.exit()`; `escape` → `self._cancel_event.set()` if a
+  turn is running; `ctrl+l` → `handle_command("/clear")` and reset the turn
+  count; `pageup`/`pagedown` → scroll the `RichLog`; `Input.Submitted` → read
+  `event.value`, clear the input, dispatch to `handle_command` if it starts with
+  `/` (exiting on `"quit"`), else append `"> {input}"` and `_launch_turn`.
+- **Agent thread** (`_launch_turn`): `threading.Thread(..., daemon=True)` calling
+  `self._repl.run_turn`, catching `TurnCancelled` and any `Exception`, and
+  **always** enqueuing `{"phase": "turn_complete"}` in a `finally` so the
+  progress line clears even on an unexpected error.
+- **Styling**: Textual CSS for the four roles Ruby's `ANSI_COLORS`/`lip()`
+  hard-codes — cyan progress, dim idle, bold-green prompt, white-on-gray status.
+
+### 4.5 Wire `tui=` into `run.py`
+- `repl(...)` gains `tui=True`
+- after `_build_session`, construct the `Repl` into a local, then:
+  ```python
+  if tui:
+      Tui(repl_instance).run()   # Textual's entry point is run(), not start()
+  else:
+      repl_instance.start()
+  ```
+- **`run()` is untouched** — Ruby's `Tui` only ever wraps `Repl`.
+- Guard the `from .tui import Tui` import so a missing `textual` degrades to the
+  plain REPL rather than breaking every import of the package.
+
+### 4.6 Example and launcher
+- `examples/example.py`: `repl(tui="--no-tui" not in sys.argv)`; leave the
+  existing config/api-key print block alone
+- `week1_baseline/bin/python/11_tui`: same shape as every prior launcher,
+  forwarding `"$@"` so `--no-tui` reaches the example
+
+### 4.7 README
+Replace the copied step-10 README: the four-zone layout (reuse Ruby's ASCII
+diagram — the shape is identical), the keybinding table, `repl(tui=...)`,
+`Repl`'s new public surface, and a "Technical Considerations" note on the Esc
+gap. **Do not carry Ruby's `charm`/native-gem/`patches/` narrative** — Textual
+has no analogous concern.
+
+### What does not change
+`config.py`, `context.py`, `registry.py`, `run_dsl.py`, `logger.py`,
+`client.py`, `backends/`, `mcp/`, `tools/`, `tasks/`, `message.py`,
+`prompt_builder.py`, `tool.py`, `examples/mcp_mud_demo.py`, `examples/mud_repl.py`,
+`test/`. No Ruby diff touches them.
+
+**`patches/bubbletea/` is not ported.** It works around a burst-input bug in the
+`bubbletea` gem's Go FFI binding, where a multi-byte `read()` chunk lost all but
+the first keypress. Textual is pure Python with no FFI boundary of that shape.
+
+---
+
+## 5. Traps
+
+**1. Widget mutation from the turn thread.** The single most likely bug. Both
+the output callback and the logger subscriber fire on the background thread;
+touching a Textual widget from there produces corruption or a hang that looks
+like the model being slow. The queue is not optional.
+
+**2. `tui=False` must be byte-identical to step 10.** It is the only
+deterministic gate available for this step — a full-screen app is not diffable.
+If the fallback REPL's banner or slash-command output drifts, the gate is lost.
+
+**3. `Input` vs `TextArea`.** Ruby uses `TextArea` pinned to one line. Using
+Textual's multi-line `TextArea` would change Enter's meaning from submit to
+newline and silently break the whole interaction model.
+
+**4. The guarded import must actually degrade.** If `from .tui import Tui`
+raises at package import, every step-11 test and the `mcp_mud_demo` break too —
+not just the TUI.
+
+---
+
+## 6. Verification
+
+Ruby ships **no automated `Tui` tests**, so there is no reference suite to match
+line-for-line. What is gateable:
+
+1. Compile every file; import `repl`, `Repl`, `Tui`, `Agent`, `TurnCancelled`.
+2. `Repl.handle_command` returns `"quit"` for `/exit`/`/quit`, `"command"` for
+   `/help`/`/quiet`/`/loud`/`/clear` (with side effects), `None` otherwise —
+   and writes **nothing to stdout** when `on_output` is registered.
+3. `Repl.run_turn`, with a fake client, routes its result and each of
+   `LoopError`/`ApiError`/`TurnCancelled` through the callback rather than `print`.
+4. `Agent.run()` raises `TurnCancelled` at the next iteration boundary once
+   `cancel_event` is set, without waiting on a real backend call.
+5. **Textual's headless harness** (`async with app.run_test() as pilot`): type
+   and submit, assert a stubbed `Repl` receives it and the log grows; `ctrl+l`
+   fires `/clear`; `escape` mid-turn sets the cancel event; `ctrl+c`/`ctrl+d`
+   exits. **This is more coverage than Ruby has for its own `Tui`** — a net
+   improvement made possible by the harness, not scope creep.
+6. **`tui=False` diffed against step 10's REPL**, piping `/help` then `/exit`.
+   Byte-identical, no model calls. The step-08 gate, still free.
+7. Manual: run the launcher against `.boukensha/settings.yaml` — four zones
+   render, fast/pasted input is not dropped (**the exact bug Ruby needed a
+   native patch for; Textual should not exhibit it, but check**), the progress
+   line animates, `PgUp`/`PgDn` scroll, and `--no-tui` falls back cleanly.
+
+---
+
+## 7. Acceptance criteria
+
+- `week1_baseline/python/11_tui` is a copy-plus-delta of Python step 10, with no
+  unrelated file changed.
+- `repl(tui=True)` launches the Textual TUI; `repl(tui=False)` / `--no-tui` is
+  byte-for-byte step 10's plain REPL.
+- `Repl` exposes `on_output`, `handle_command`, `run_turn`, `banner` and
+  `mud_status_string`; **no turn or session logic moved into `Tui`**.
+- Esc cancels at the next iteration/tool-call boundary via `cancel_event` /
+  `TurnCancelled` — the one intentional documented gap.
+- The status bar names the MUD route, derived from `Repl.mud_status_string()`.
+- No `patches/` equivalent exists or is needed.
+- `requirements.txt` gains exactly one dependency; no gem-packaging,
+  native-build or `boukensha_loader` concepts are introduced.
+
+---
+
+## 8. Open questions
+
+1. **Does `mud_repl.py` survive?** Step 10 gained it as the interactive
+   real-MUD entry point, and its launcher was deliberately not created pending
+   your instructor's preference. If the TUI becomes the interactive path,
+   `mud_repl.py` may be redundant — or may be the right place to pass
+   `tui=False` for a scriptable session.
+2. **Textual version pin.** `requirements.txt` has been unpinned throughout the
+   port. Textual's widget API has moved between majors; an unpinned install a
+   month from now may not have `RichLog`. Pin it, or accept the drift?
+3. **Is `0.11.0` right?** The instructor's Ruby step 11 is `0.11.1`; ours is
+   `0.11.0`. Matching ours keeps the two languages aligned *here*; matching
+   theirs keeps us aligned *upstream*. They cannot both be satisfied.
