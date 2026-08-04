@@ -29,11 +29,10 @@ GEM
     gum (0.3.2)
     harmonica (0.1.1)
     lipgloss (0.2.2-x86_64-linux-gnu)
-    mud_manager (0.1.0)
+    mud_manager (0.2.0)
     ntcharts (0.1.2-x86_64-linux-gnu)
 
 PLATFORMS
-  ruby
   x86_64-linux
 
 DEPENDENCIES

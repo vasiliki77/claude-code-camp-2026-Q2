@@ -1,0 +1,393 @@
+# Delta Plan — carrying steps 10–11 forward into step 12 (Context Management)
+
+Sibling of `step_deltas/11_tui`, and the fourth hand-application of the same
+carry-forward, exactly as that document predicted.
+
+**But it is not the same kind of merge.** Steps 10 → 11 was additive: step 11
+had no competing changes in `registry.rb`, `config.rb` or `boukensha_loader.rb`,
+so most of it was a straight copy. Step 12 is a genuine **two-way merge**. Every
+file in `12_context/` is dated 13-07-2026 — the original import, untouched since
+— so step 12 is the instructor's snapshot, built on the *pre-MCP, pre-tasks*
+codebase, and it carries real step-12 work of its own (`models.rb`, compaction,
+turn-token budget, reasoning blocks, the OpenAI `/v1/responses` move). Neither
+side is a superset. Six files need hunk-by-hunk merging, not copying.
+
+---
+
+## 1. Current state
+
+```
+                                   step 11    step 12
+mcp/client.rb                        ✓          ✗
+tools/mcp.rb                         ✓          ✗
+tasks/base.rb, tasks/player.rb       ✓          ✗
+prompts/system.md (bundled)          ✓          ✗
+Config#mcp_servers / #tasks          ✓          ✗
+Registry#context reader              ✓          ✗
+loader: KEY=value rc + BOUKENSHA_MCP ✓          ✗   (bare-path only again)
+test/                                ✓          ✗
+Logger response cost metadata        ✓          ✗
+fuller backend MODELS tables         ✓          partial (both sides differ)
+examples/mcp_mud_demo.rb             ✓          ✗
+
+models.rb                            ✗          ✓
+Context compaction + token counters  ✗          ✓
+Agent max_turn_tokens                ✗          ✓
+Logger compaction/reasoning/plan     ✗          ✓
+reasoning normalization (backends)   ✗          ✓
+OpenAI /v1/responses                 ✗          ✓
+TUI context colour coding            ✗          ✓
+/compact                             ✗          ✓
+version                            0.11.0     0.12.0
+```
+
+`tools/mud.rb` (480 lines) is **byte-identical** across both steps — nothing to
+do there. `bin/boukensha`, `boukensha.gemspec` and `Gemfile` are identical too.
+
+**`log_viz` is the tiebreaker.** `log_viz/lib/log_viz/session.rb` already
+switches on `compaction`, `reasoning` and `plan` (lines 86–97), *and*
+`views/session.erb` already renders `cost_usd` and `context_window` (lines 133–164),
+*and* `app.rb` reads `turn_tokens` / `max_tokens`. The viewer was written against
+the **union** of both loggers. Neither step currently produces logs it can fully
+render; the merged step 12 is the first that will.
+
+---
+
+## 2. Straight copies (no decisions)
+
+Copy from `11_tui/`, verbatim unless noted.
+
+| File | Notes |
+| --- | --- |
+| `lib/boukensha/mcp/client.rb` | verbatim (204 lines) |
+| `lib/boukensha/tools/mcp.rb` | verbatim (113 lines) |
+| `lib/boukensha/tasks/base.rb` | verbatim (80 lines) — but see §4.1, it gains two methods |
+| `lib/boukensha/tasks/player.rb` | verbatim (9 lines) |
+| `prompts/system.md` | the bundled default `Config::PROMPTS_DIR` points at |
+| `lib/boukensha/registry.rb` | the `attr_reader :context` block, 5 lines |
+| `lib/boukensha_loader.rb` | whole file; step 11's is a strict superset (it already has `--no-tui`). Change only the docstring example path to `12_context` |
+| `examples/mcp_mud_demo.rb` | adjust the relative daemon path if depth differs |
+| `test/` (3 files) | `test_tools_mcp.rb`, `test_config_mcp_servers.rb`, `support/tiny_mcp_server.rb` |
+
+Everything else in this plan is a merge.
+
+---
+
+## 3. The six merges
+
+### 3.1 `config.rb` — the limits collision
+
+Step 11 replaced `provider_type` / `model` / `system_prompt` with `tasks(name)`
++ `user_prompts_dir` + `PROMPTS_DIR`, delegating prompt resolution to
+`Tasks::Base`. Step 12 kept the old flat readers **and added four new ones**:
+`agent_max_iterations`, `agent_max_output_tokens`, `agent_max_turn_tokens`,
+`agent_compaction_threshold`, reading a global `agent:` block.
+
+Take step 11's structure and drop step 12's `provider_type` / `model` /
+`system_prompt` — their only call sites are in `boukensha.rb`, which §3.5
+rewrites anyway. `mcp_servers` / `normalize_server` / `fetch_either` come over
+verbatim.
+
+**That leaves `max_iterations` configurable in two places** — `tasks.player.max_iterations`
+(step 11, via `Tasks::Base`) and `agent.max_iterations` (step 12, via `Config`) —
+with no defined precedence. See §5.1; this is the decision that must be settled
+before the merge, because §3.2 and §3.5 both depend on the answer.
+
+The live config at `.boukensha/settings.yaml` has a `tasks:` block and an
+`mcp_servers:` block and **no `agent:` block**, which is one data point for
+which way to go.
+
+### 3.2 `agent.rb` — keep 12's shape, restore 11's usage handling
+
+Step 12's structure wins: `reset_turn_tokens` / `compact_if_needed` at the top
+of `run`, the two independent ceilings, `record_usage`, `log_reasoning`, `plan`
+preamble logging, `extract_text` joined with `"\n"`.
+
+Restore from step 11:
+
+- `resolve_max_iterations` / `resolve_max_output_tokens` (task-settings aware) —
+  or delete them, per §5.1.
+- `log_response(text:, response:)` with `task: @context.task, backend: @builder.backend`.
+  Step 12 calls `@logger.response(text:, usage:, stop_reason:)` directly, which
+  drops provider, model and cost — the fields `session.erb:136` renders.
+
+**`normalized_usage` must survive, and `record_usage` must go through it.**
+Step 12's `record_usage` reads only `usage["input_tokens"]` / `["output_tokens"]`.
+Those keys are Anthropic's. Gemini returns `usageMetadata.promptTokenCount`,
+Ollama returns top-level `prompt_eval_count` / `eval_count`, OpenAI Responses
+returns `input_tokens` under its own envelope. On any non-Anthropic backend
+`turn_tokens` and `current_tokens` stay **0**, so `max_turn_tokens` never trips,
+`needs_compaction?` never returns true, and the TUI context bar reads 0% forever
+— a silent failure of the entire step. Step 11's `normalized_usage` already
+handles all three shapes; wire it in.
+
+### 3.3 `logger.rb` — union, no conflict
+
+Additive in both directions. Keep step 11's `execution_metadata` /
+`usage_tokens` / `first_integer` / `estimate_cost` private block on `#response`,
+and add step 12's `#compaction`, `#reasoning`, `#plan`, plus `context_window:`
+on `#prompt`. `Backends::Base#estimate_cost` already exists on both sides — the
+only difference in `base.rb` is step 12's normalized-response doc comment, which
+is worth keeping.
+
+### 3.4 `repl.rb` — 11's structure, 12's command
+
+Step 11's restructure (the `@output_cb` / `on_output` indirection, public
+`banner`, `attr_reader :logger, :context, :model, :version`, `mud_status_string`
+made public, `mcp_status_string`) is the base. Add on top:
+
+- `mcp:` back into the constructor alongside step 12's `max_turn_tokens:`
+- `/compact` in `handle_command`, plus the `HELP` heredoc and banner lines
+  (note step 12 re-aligned the whole `HELP` block for the wider command name)
+- `max_turn_tokens:` into the `Agent.new` call in `run_turn`
+
+### 3.5 `boukensha.rb` — the largest merge (378 vs 241 lines)
+
+Start from step 12's file. Restore from step 11, verbatim: `MUD_PREFIX`,
+`mcp_opts`, `mud_server_from_config`, `register_all_mcp`, `close_mcp_clients`,
+`mud_env_from_config`, `require_relative "boukensha/tasks/player"` and
+`require_relative "boukensha/tools/mcp"`.
+
+Then, in **both** `run` and `repl`:
+
+- swap `cfg.system_prompt` / `cfg.model` / `cfg.provider_type` for step 11's
+  `task_class` / `task_settings` four-liner
+- keep step 12's `context_window ||= Models.context_window(model)` and the
+  `Context.new(..., context_window:, compaction_threshold:)` call — but note
+  `Context.new` no longer takes `task:` in step 12 while `Agent#log_response`
+  and `Context#to_s` still want it. **Restore `task:` on `Context`** (step 11's
+  `attr_reader :task`) or the cost metadata in §3.2 has nothing to name the task
+  with.
+- `mcp: nil` keyword on both signatures; `mcp_clients = register_all_mcp(...)`
+  after the `Tools::Mud` registration; `mcp: mcp_clients` into `Repl.new`;
+  `close_mcp_clients(mcp_clients)` in both `ensure` blocks after `logger&.close`
+- keep step 12's `context_window:` in the `Logger.new` snapshot, and add step
+  11's `task:` back to it
+
+### 3.6 `backends/*.rb` — reasoning normalization + table union
+
+All five backends: **keep step 12's reasoning work** — `normalize_block` /
+`denormalize_block` and the `:assistant` branch in Anthropic, `think: false`
+plus the `message["thinking"]` block in Ollama, Gemini's `thought` /
+`thoughtSignature`, and the whole OpenAI `/v1/responses` rewrite (`call_id`,
+`function_call_output`, `instructions`). None of that exists in step 11.
+
+The `MODELS` tables have drifted **both ways** and need reconciling by hand:
+
+| Backend | Only in 11 | Only in 12 |
+| --- | --- | --- |
+| Anthropic | `claude-haiku-4-5-20251001` alias | comments on thinking/effort support |
+| Ollama | 8 further models (`gemma4`, `gemma4:12b/26b/31b`, `qwen3:*`, `deepseek-r1:8b`) | — |
+| Gemini | `gemini-2.5-*` (3 entries) | `gemini-3.5-flash`, `gemini-3.1-flash-lite` |
+| OpenAI | `gpt-5.4` | `gpt-5.4-nano` |
+| Ollama Cloud | — | (same set, reordered) |
+
+This is not cosmetic in step 12: `Base#configure_model` raises
+`UnsupportedModelError` on an unknown id, so a dropped row is a model that stops
+working, and `context_window` from these tables is what compaction divides by.
+
+---
+
+## 4. `models.rb` — the table that does not match its own documentation
+
+`ITERATIONS.md` describes `Boukensha::Models` as "a static model → capability
+table **built from every backend's own model list**". The actual file is 21
+lines with three hand-written Anthropic entries and a 32,000-token default.
+
+Two concrete consequences:
+
+1. **It already disagrees with the backends.** `Models::TABLE` says
+   `claude-sonnet-4-6` is 200,000; `Backends::Anthropic::MODELS` says 1,000,000.
+   Same for `claude-opus-4-8`. Compaction would fire at 170k on a 1M window.
+2. **Every non-Anthropic model gets `DEFAULT_CONTEXT_WINDOW = 32_000`.** Run the
+   configured `gemma4:e4b` (128k) and the agent compacts at ~27k — throwing away
+   three quarters of a context window that is right there, and doing it silently.
+
+Since `Models.context_window(model)` is called *before* a backend is
+constructed, the fix is to fold the backend tables at load time:
+
+```ruby
+TABLE = [Backends::Anthropic, Backends::OpenAI, Backends::Gemini,
+         Backends::Ollama, Backends::OllamaCloud]
+        .flat_map { |b| b::MODELS.to_a }.to_h.freeze
+```
+
+which requires moving `require_relative "boukensha/models"` *below* the backend
+requires in `boukensha.rb`. See §5.2 — the alternative is to keep it static and
+fix the three wrong numbers by hand.
+
+---
+
+## 5. Decisions this plan exists to force
+
+### 5.1 Where do the agent limits live?
+
+| Option | Trade-off |
+| --- | --- |
+| **A. Tasks own everything.** Add `max_turn_tokens` and `compaction_threshold` to `Tasks::Base` beside the existing `max_iterations` / `max_output_tokens`; drop `Config#agent_*` and the `agent:` block. | One place to configure a limit, and it scales with the second task the design is clearly heading toward. Costs two new methods and a defaults decision. The live `settings.yaml` already has `tasks:` and no `agent:`. |
+| **B. Keep the `agent:` block for the new pair only.** `max_iterations` / `max_output_tokens` stay per-task; `max_turn_tokens` / `compaction_threshold` stay global. | Zero merge work. But "which file do I edit to cap a turn?" now has two answers depending on which limit, which is the kind of split that gets rediscovered painfully six steps later. |
+| **C. Config falls back to tasks.** `agent:` wins if present, else the task value. | Most flexible, most surface, and precedence bugs are invisible until a limit fires at the wrong number. |
+
+**Recommendation: A.** The `agent:` block has no user in the repo's actual
+config, and step 11 already made the call that per-task is where limits belong.
+
+### 5.2 `models.rb`: derived or static?
+
+**Recommendation: derived** (§4). The two tables have already drifted apart at
+three entries out of three overlapping — a static copy is a copy that will be
+wrong again by step 13. If derived is rejected, the three Anthropic windows must
+still be corrected and `DEFAULT_CONTEXT_WINDOW` reconsidered, because 32k is
+below every model the project actually runs.
+
+### 5.3 The TUI status bar, again
+
+Step 11's plan chose option B and added `· mud:mcp` / `· mud:direct` to
+`render_status`. Step 12's version of the same method adds `ctx 12k/200k (6%)`
+and a `⚠`. Merged, the bar reads:
+
+```
+ boukensha v0.12.0 · claude-haiku-4-5 · ctx 12k/200k (6%) ⚠ · 26 tools · mud:mcp · 14:32:07
+```
+
+That is ~88 columns before `ljust`, on a bar with no truncation logic. Decide
+now which field degrades first on an 80-column terminal — the recommendation is
+to drop the absolute `used/max` and keep the percentage and the colour, since
+the percentage is what the colour coding is *for* and the raw numbers are also
+on the progress line.
+
+### 5.4 `tools/file_system.rb`
+
+Step 12 comments out `list_directory` and `search_files` as coding-harness
+leftovers; step 11 still registers them. Under the MCP-host model these come
+from a filesystem MCP server anyway. **Recommendation: take step 12's disabled
+version** — it is the more recent statement of intent and it shrinks the
+built-in surface, which is the direction step 10 set. This changes the built-in
+tool count between steps 11 and 12, which matters only for §6's baseline, not
+for the MCP tool-table gate.
+
+### 5.5 Compaction can produce an invalid conversation
+
+Not a merge conflict — a bug in the code being merged, and the merge is when to
+decide about it. `Context#compact_messages!` drops the oldest ~40% of messages
+by count, blindly:
+
+```ruby
+drop_count = [(@messages.size * 0.40).ceil, @messages.size - 2].min
+@messages  = @messages.drop(drop_count)
+```
+
+Nothing keeps a `:tool_use` assistant message and its matching `:tool_result`
+together. Anthropic rejects a `tool_result` block whose `tool_use_id` has no
+preceding `tool_use` with a 400, and also requires the first message to be
+`user` — a drop landing on an assistant message violates both. With the MUD
+tools registered, tool-call pairs are the *majority* of the history, so the
+window where this fires is not a corner case: it is the common case at 85%.
+
+| Option | Trade-off |
+| --- | --- |
+| **A. Ship as-is, note it.** | Zero work now; a 400 the first time compaction fires in a real session, mid-play, with the failure surfacing as `ApiError` inside the TUI. |
+| **B. Snap the drop point.** After computing `drop_count`, advance it until the first kept message is a `:user` message that is not a `tool_result`. ~5 lines. | Small, deterministic, unit-testable without an API key. Occasionally drops a little more than 40%. |
+| **C. Summarize instead of dropping.** | What "compaction" means in a real harness, and a whole step of its own. Out of scope. |
+
+**Recommendation: B**, and gate it with the unit test in §6.
+
+---
+
+## 6. Test plan
+
+Step 12 has **no `test/` directory**. Port step 11's three files first, paths
+adjusted.
+
+**Free deterministic gates, no API key, no MUD:**
+
+- `Context` unit tests — `usage_fraction` / `usage_pct` (including the
+  `context_window == 0` guard), `needs_compaction?` at the threshold boundary,
+  `compact_messages!` drop count, its "keep at least 2" floor, its
+  `current_tokens` reset, and `reset_turn_tokens` / `add_turn_tokens`.
+- **The §5.5 invariant**, if B is taken: after `compact_messages!` on a history
+  of interleaved tool pairs, no surviving `:tool_result` may lack its
+  `:tool_use`, and `messages.first.role` must be `:user`.
+- **The §3.2 regression**, which is the one that would otherwise ship silently:
+  feed `Agent#record_usage` a Gemini-shaped (`usageMetadata`) and an
+  Ollama-shaped (`prompt_eval_count`) response hash and assert `turn_tokens`
+  is non-zero. This test fails on step 12's current code, which is the point.
+- `/compact` through the plain REPL (`tui: false`), alongside `/help`, `/clear`
+  and `/quiet` — the same never-reaches-the-model gate step 08 established.
+
+**Cross-step gate (free, and the strongest one):** step 12's MCP tool table must
+be byte-identical to step 11's — same `mud-manager` process, so any difference
+is a bug in the copy. Dump name, description, parameter types and enums as
+sorted JSON from both and `diff`. (Both traps already paid for once: sort inner
+keys on *both* sides, and JSON-encode identically — two descriptions contain an
+em dash.)
+
+**log_viz gate:** run one real session, open it in `log_viz`, and confirm the
+`reasoning`, `plan`, `compaction`, `cost_usd` and `context_window` fields all
+render. Until this merge no step produced all of them; this is the first
+end-to-end check that the viewer and the logger agree.
+
+**Manual:** `ruby examples/mcp_mud_demo.rb --dry` must print the daemon info,
+26 `tbamud__` tools and `[dry run OK …]`, matching step 10 and 11 exactly.
+
+---
+
+## 7. Risks
+
+1. **Non-Anthropic token accounting is dead on arrival** without §3.2. It fails
+   silently — no error, just a context gauge pinned at 0% and compaction that
+   never runs.
+2. **`Gemfile.lock` pins `mud_manager 0.1.0`** in step 12; step 11 has 0.2.0,
+   which is the version carrying `mud-manager --mcp`. The MCP path cannot work
+   until this is bumped. Step 12's lock also carries an extra `ruby` platform
+   line — regenerate rather than hand-edit.
+3. **`boukensha-0.12.0.gem` already exists in the folder**, built from the
+   pre-merge source. After merging: `gem uninstall boukensha`, rebuild, reinstall
+   — the version number will not change, so nothing else signals staleness. The
+   fourth time this week that "the artifact on disk is newer than the artifact
+   executing" would cost an hour.
+4. **No launcher exists for step 11 or 12.** `week1_baseline/ruby/bin/` stops at
+   `10_standard_tool_library`. Step 12 needs `bundle exec` (nine charm gems, not
+   installed globally — the 02-08 journal records exactly this failure), so add
+   `bin/12_context` with a `bundle check || bundle install` guard.
+5. **`~/.boukensharc` currently points at `11_tui`** and sets `BOUKENSHA_DIR` to
+   the repo-local `.boukensha` via a `KEY=value` line. Step 12's loader parses
+   only a bare path, so pointing it at step 12 *before* copying the loader
+   (§2) silently loses the config dir and the agent reads `~/.boukensha`
+   instead. Copy the loader first, repoint second.
+6. **Two MUD routes registering the same 26 names.** `mcp_opts` returning
+   non-nil must force `mud: false`, exactly as in steps 10 and 11.
+7. **Compaction has never actually run.** Every gate above is static. The first
+   real trigger needs a session driven past 85% of the window deliberately —
+   easiest with a small Ollama model, or by temporarily lowering
+   `compaction_threshold`, which §5.1's outcome determines how to do.
+8. **This is the fourth hand-application, and the last one this approach
+   survives.** Step 11's plan asked whether later steps should be regenerated
+   from the newest step rather than patched independently. The evidence is now
+   in: step 12 lost the rc-file parsing, the MCP host, the tasks layer *and* the
+   response cost metadata, while independently rewriting five of the same files.
+   **Recommendation: after this merge, step 12 becomes the canonical line** —
+   week 2 branches from it, and no further step is patched forward from an
+   older snapshot.
+
+---
+
+## 8. Open questions
+
+1. **§5.1** — tasks own the limits (A), split (B), or fallback chain (C)?
+- Whatever is the most cost effective
+2. **§5.2** — derive `Models::TABLE` from the backends, or keep it static and
+   fix the three wrong windows by hand?
+   - Do what you think is best
+3. **§5.3** — which status-bar field degrades first on 80 columns?
+- whichever you think is best
+4. **§5.5** — snap the compaction drop point now (B), or ship as-is and note it (A)?
+- whichever you think is best
+5. **Does step 12 get its own `test/`, or does the suite live in one place?**
+   Same question step 11's plan left open, now with three candidate homes. The
+   snapshot-per-step convention says duplicate; three drifting copies says
+   otherwise.
+   - whichever you think is best
+6. **Backend `MODELS` tables (§3.6)** — union both sides, or treat step 12's
+   (newer model ids, commented-out preview entries) as the intended current set
+   and drop step 11's older ones?
+   - treat as the intended current set

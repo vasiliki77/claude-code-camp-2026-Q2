@@ -3,11 +3,12 @@ require_relative "message"
 
 module Boukensha
   class Context
-    attr_reader :system, :messages, :tools, :context_window, :working_dir,
+    attr_reader :task, :system, :messages, :tools, :context_window, :working_dir,
                 :turn_tokens, :compaction_threshold
     attr_accessor :current_tokens
 
-    def initialize(system:, context_window: 200_000, working_dir: nil, compaction_threshold: 0.85)
+    def initialize(system:, task: nil, context_window: 200_000, working_dir: nil, compaction_threshold: 0.85)
+      @task                 = task
       @system               = system
       @context_window       = context_window
       @working_dir          = working_dir ? File.expand_path(working_dir) : nil
@@ -58,12 +59,15 @@ module Boukensha
       usage_fraction >= threshold
     end
 
-    # Drop the oldest 40% of messages to free space, keeping at least 2.
-    # Resets current_tokens to 0 (will be updated by the next API response).
-    # Returns the number of messages dropped.
+    # Drop the oldest messages to free space, keeping roughly target_fraction of
+    # them and at least 2. Resets current_tokens to 0 (the next API response
+    # reports the true new size). Returns the number of messages dropped.
     def compact_messages!(target_fraction: 0.60)
-      drop_count = [(@messages.size * 0.40).ceil, @messages.size - 2].min
-      drop_count = [drop_count, 0].max
+      return 0 if @messages.size <= 2
+
+      drop_count = [((@messages.size * (1.0 - target_fraction)).ceil), @messages.size - 2].min
+      drop_count = snap_to_user([drop_count, 0].max)
+
       @messages = @messages.drop(drop_count)
       @current_tokens = 0
       drop_count
@@ -79,7 +83,28 @@ module Boukensha
     def turn_count = @messages.size
 
     def to_s
-      "#<Context turns=#{turn_count} tools=#{tool_count} window=#{context_window} current=#{current_tokens}>"
+      "#<Context task=#{task&.task_name} turns=#{turn_count} tools=#{tool_count} " \
+        "window=#{context_window} current=#{current_tokens}>"
+    end
+
+    private
+
+    # Advance a drop point until the first surviving message is a plain :user
+    # turn.
+    #
+    # Dropping purely by count orphans any :tool_result whose :tool_use was
+    # dropped with it — Anthropic answers that with a 400, and separately
+    # requires a conversation to open on a user turn. With the MUD tools
+    # registered, tool pairs are most of the history, so an unsnapped drop lands
+    # mid-pair more often than not.
+    #
+    # Snapping forward only ever drops *more*, never less, so the invariant
+    # holds unconditionally. The newest message is always a user turn (both
+    # Boukensha.run and Repl#run_turn append the input before the agent runs),
+    # so the scan always terminates on a real index.
+    def snap_to_user(index)
+      index += 1 while index < @messages.size && @messages[index].role != :user
+      index
     end
   end
 end

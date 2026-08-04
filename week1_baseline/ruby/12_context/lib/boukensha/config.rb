@@ -9,29 +9,29 @@ module Boukensha
     #   2. ~/.boukensha  (default)
     DEFAULT_DIR = File.join(Dir.home, ".boukensha").freeze
 
-    attr_reader :dir, :settings, :system_prompt
+    # Default prompts shipped alongside this step.
+    PROMPTS_DIR = File.expand_path("../../../prompts", __dir__).freeze
+
+    attr_reader :dir, :settings
 
     def initialize
       @dir = resolve_dir
       load_env
-      @settings     = load_settings
-      @system_prompt = load_system_prompt
+      @settings = load_settings
     end
 
-    # ---------- provider --------------------------------------------------
+    # ---------- tasks -----------------------------------------------------
 
-    def provider_type
-      dig(:tasks, :player, :provider) || "anthropic"
+    # With no argument: returns the full tasks hash from settings.yaml.
+    # With a name: returns that task's settings hash, e.g. tasks(:player).
+    def tasks(name = nil)
+      all = dig(:tasks) || {}
+      name ? (all[name.to_s] || all[name.to_sym]) : all
     end
 
-    def model
-      dig(:tasks, :player, :model) || "claude-haiku-4-5"
-    end
-
-    # ---------- system prompt ---------------------------------------------
-
-    def system_override?
-      dig(:system, :override) == true
+    # The user's prompts directory for task prompt overrides.
+    def user_prompts_dir
+      File.join(@dir, "prompts")
     end
 
     # ---------- MUD connection --------------------------------------------
@@ -52,33 +52,46 @@ module Boukensha
       dig(:mud, :password)
     end
 
-    # ---------- agent limits ----------------------------------------------
-    # Static per-turn circuit breakers, read where the agent is constructed.
-    # A value of 0 or nil means "disabled" (no ceiling) — useful for debugging.
+    # ---------- MCP servers -------------------------------------------------
 
-    def agent_max_iterations
-      v = dig(:agent, :max_iterations)
-      v.nil? ? 25 : Integer(v)
-    end
+    # MCP servers declared in settings.yaml, as data rather than code:
+    #
+    #   mcp_servers:
+    #     mud:
+    #       command: mud-manager
+    #       args:    [--mcp]
+    #       prefix:  tbamud
+    #       env:
+    #         MUD_HOST: localhost
+    #         MUD_NAME: Gandalf
+    #     filesystem:
+    #       command:  npx
+    #       args:     [-y, "@modelcontextprotocol/server-filesystem", /tmp]
+    #       required: false
+    #
+    # Returns { "mud" => { command:, args:, env:, prefix:, required: }, ... }.
+    #
+    # "Server" here means an MCP server *process* — one entry, one subprocess.
+    # It never means a MUD. Connecting to several MUDs is a different axis, and
+    # the daemon already solves it: SessionPool holds multiple named sessions
+    # inside one `mud-manager`. Two MUDs is two sessions in one server.
+    #
+    # `required` defaults to **true**: a server you bothered to configure and
+    # which then fails to start is a problem you want to hear about. Mark the
+    # decorative ones `required: false` and they warn and are skipped.
+    def mcp_servers
+      raw = dig(:mcp_servers)
+      return {} unless raw.is_a?(Hash)
 
-    def agent_max_output_tokens
-      v = dig(:agent, :max_output_tokens)
-      v.nil? ? 1024 : Integer(v)
-    end
-
-    def agent_max_turn_tokens
-      v = dig(:agent, :max_turn_tokens)
-      v.nil? ? 60_000 : Integer(v)
-    end
-
-    def agent_compaction_threshold
-      v = dig(:agent, :compaction_threshold)
-      v.nil? ? 0.85 : Float(v)
+      raw.each_with_object({}) do |(name, spec), out|
+        spec = {} unless spec.is_a?(Hash)
+        out[name.to_s] = normalize_server(spec)
+      end
     end
 
     # ---------- low-level helpers -----------------------------------------
 
-    # Fetch a nested key path from settings, e.g. dig(:provider, :model)
+    # Fetch a nested key path from settings, e.g. dig(:mud, :host)
     def dig(*keys)
       keys.reduce(@settings) do |node, key|
         case node
@@ -89,12 +102,35 @@ module Boukensha
     end
 
     def to_s
-      "#<Boukensha::Config dir=#{@dir} provider=#{provider_type} model=#{model}>"
+      "#<Boukensha::Config dir=#{@dir} tasks=#{tasks.keys.join(',')}>"
     end
 
     def inspect = to_s
 
     private
+
+    # YAML may hand us string or symbol keys depending on how it was written, so
+    # every lookup goes through fetch_either rather than assuming one.
+    def normalize_server(spec)
+      env = fetch_either(spec, :env) || {}
+      env = {} unless env.is_a?(Hash)
+
+      required = fetch_either(spec, :required)
+
+      {
+        command:  fetch_either(spec, :command),
+        args:     Array(fetch_either(spec, :args)).map(&:to_s),
+        env:      env.each_with_object({}) { |(k, v), h| h[k.to_s] = v.to_s },
+        prefix:   fetch_either(spec, :prefix),
+        required: required.nil? ? true : !!required
+      }
+    end
+
+    def fetch_either(hash, key)
+      return nil unless hash.is_a?(Hash)
+
+      hash.key?(key.to_s) ? hash[key.to_s] : hash[key.to_sym]
+    end
 
     def resolve_dir
       raw = ENV.fetch("BOUKENSHA_DIR", nil) || DEFAULT_DIR
@@ -115,20 +151,6 @@ module Boukensha
       else
         {}
       end
-    end
-
-    # Resolves the system prompt. When the player task opts into a prompt
-    # override (tasks.player.prompt_override.system: true), the task-scoped
-    # file prompts/player/system.md wins; otherwise (and as a fallback) the
-    # flat prompts/system.md is used. Returns nil when neither exists.
-    def load_system_prompt
-      if dig(:tasks, :player, :prompt_override, :system) == true
-        task_file = File.join(@dir, "prompts", "player", "system.md")
-        return File.read(task_file).strip if File.exist?(task_file)
-      end
-
-      system_file = File.join(@dir, "prompts", "system.md")
-      File.exist?(system_file) ? File.read(system_file).strip : nil
     end
   end
 end

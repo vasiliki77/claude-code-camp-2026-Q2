@@ -1,0 +1,359 @@
+# Port Plan — Step 12: Context Management (Ruby → Python)
+
+Port the step-12 delta: real context-window tracking, a colour-coded usage
+indicator, auto-compaction, a second per-turn circuit breaker, normalized
+reasoning blocks, and the OpenAI Responses API move.
+
+> **This one is a pure forward delta, not a merge.** Ruby's step 12 was a
+> genuine two-way merge — that snapshot had been branched before the MCP host
+> and the tasks layer, so half the work was carrying steps 10–11 into it
+> (`docs/plans/step_deltas/12_context`). **None of that applies here.**
+> `week1_baseline/python/12_context` is a verbatim copy of `python/11_tui`
+> (`diff -rq --exclude=__pycache__` empty, confirmed 2026-08-04), and `11_tui`
+> already carries the MCP host, `tasks/`, and the response cost metadata. The
+> Python side inherits the merged result and only has to add step 12 itself.
+
+The four judgment calls that merge forced are **already settled** (§3). Adopt
+them; do not re-open them here.
+
+---
+
+## 1. Starting state
+
+```sh
+diff -rq --exclude=__pycache__ \
+     week1_baseline/python/11_tui \
+     week1_baseline/python/12_context      # empty — confirmed 2026-08-04
+```
+
+| Already present in `python/12_context` | What step 12 needs |
+| --- | --- |
+| `tasks/base.py` with `max_iterations` / `max_output_tokens` | + `max_turn_tokens`, `compaction_threshold` |
+| `Agent._normalized_usage` (agent.py:206) | folded into a shared `usage.py` |
+| `Logger._usage_tokens` / `_first_integer` (logger.py:188, 211) | same |
+| `Logger.response` cost metadata (logger.py:82, 149) | unchanged |
+| `mcp/`, `tools/mcp.py`, `Config.mcp_servers` | unchanged |
+| `Tui` with `_mud_route()` (tui.py:235) | + context colour, compaction notice |
+| `context.py` — 44 lines, no token state at all | the whole counter/compaction surface |
+| — | `boukensha/models.py`, `boukensha/usage.py` (both new) |
+
+`version.py` is `VERSION = "0.11.0"`. `requirements.txt` pins `textual==8.2.8`
+— step 11's open question about pinning was answered by pinning, and **step 12
+adds no dependency at all**. `week1_baseline/bin/python/12_context` does not
+exist.
+
+Python has no `tools/mud.py`: the MUD arrives only over MCP. Nothing here
+changes that.
+
+---
+
+## 2. Where the Ruby delta does not map 1:1
+
+| Ruby step 12 | Python here | Consequence |
+| --- | --- | --- |
+| `run` and `repl` each wire the session by hand — every plumbing change applied twice | `_build_session` (run.py:149) builds it once for both | **The whole `context_window` / `compaction_threshold` / `max_turn_tokens` plumbing lands in one place.** Do not scatter it back into `run()` and `repl()` for symmetry with Ruby |
+| `Context#compact_messages!`, `clear_messages!` | no bang convention | `compact_messages()`; `clear_messages()` already exists (context.py:28) |
+| message roles are symbols (`:user`) | roles are strings (`"user"`) | the snap predicate compares `msg.role == "user"` |
+| `@messages.drop(n)` | `self.messages = self.messages[n:]` | rebind rather than mutate, matching `clear_messages`'s existing comment |
+| envelope-picking in `agent.rb`, key aliases in `logger.rb` | **identical split** — agent.py:206 vs logger.py:188/211 | the new `usage.py` consolidates both sides, exactly as it did in Ruby |
+| status bar is one string with ANSI colour constants and a `ctx_color` helper | Textual `Static#status` styled by CSS (tui.py:53–56) | colour coding is **CSS classes** (`ctx-warn` / `ctx-alert`) toggled with `add_class` / `remove_class`, not a colour returned from a helper |
+| `Models::TABLE` folds `Backends::X::MODELS` at load | same idea in `models.py` | mind the import order: `models.py` imports `backends`, so nothing under `backends/` may import `models` |
+| step 12's snapshot had `list_directory` / `search_files` commented out of `file_system` | Python's are live and **tested** (`test_tools_local.py:52, 68`) | **Do not port that.** It was an artifact of the instructor's snapshot, not a step-12 feature; porting it deletes passing tests for no gain |
+
+### Two bugs that came over with the port
+
+Both were found while merging Ruby, and both exist verbatim here:
+
+1. **tui.py:185–186** reads `usage["input_tokens"]` / `usage["output_tokens"]`
+   — Anthropic's key names. On Gemini or Ollama the live `↑`/`↓` counters read
+   zero all turn. Route through `usage.py` like everything else.
+2. **tui.py:210** renders `iter {n}/{Agent.MAX_ITERATIONS}` — the class
+   default, not the ceiling actually being enforced, which since step 11 comes
+   from the task's settings. The `iteration` event already carries `max`
+   (logger.py:41); read it from there.
+
+---
+
+## 3. Decisions already settled on the Ruby side — adopt verbatim
+
+1. **Limits live with the task.** `max_turn_tokens` and `compaction_threshold`
+   join `max_iterations` / `max_output_tokens` on `Tasks::Base`, read from
+   `tasks.<name>.*`. There is **no `agent:` block** — the instructor's step-12
+   snapshot had one, and it was dropped so a ceiling has exactly one home.
+   `.boukensha/settings.yaml` already documents the four keys as comments, and
+   both languages read that same file.
+2. **`Models` is derived, not hand-written.** The hand-written table had
+   already drifted: it claimed `claude-sonnet-4-6` was 200k while the backend
+   said 1M, and gave every non-Anthropic model a 32k fallback — the configured
+   `gemma4:e4b` (128k) would have compacted at a fifth of its real window.
+3. **The status bar carries the percentage only**; the absolute `used/max` pair
+   stays on the progress line. The bar already carries version, model, tool
+   count, MUD route and clock, and it is a fixed width.
+4. **The compaction drop point snaps forward to a plain user turn.** Dropping
+   by count alone orphans a `tool_result` whose `tool_use` went with it —
+   Anthropic answers that with a 400, and separately requires a conversation to
+   open on a user turn. Tool pairs are most of a MUD session's history.
+
+---
+
+## 4. The delta
+
+### 4.1 Version
+`boukensha/version.py`: `VERSION = "0.12.0"`. No dependency changes.
+
+### 4.2 `boukensha/usage.py` — new
+
+Mirrors Ruby's `Boukensha::Usage`:
+
+- `INPUT_KEYS = ("input_tokens", "prompt_tokens", "promptTokenCount", "prompt_eval_count")`
+- `OUTPUT_KEYS = ("output_tokens", "completion_tokens", "candidatesTokenCount", "eval_count")`
+- `envelope(response)` — `response["usage"]`, else `response["usageMetadata"]`,
+  else the top-level Ollama counters lifted into a dict, else `None`
+- `tokens(envelope)` → `{"input": int | None, "output": int | None}`
+
+Then delete `Agent._normalized_usage` and `Logger._usage_tokens` /
+`Logger._first_integer`, and call through the module from `agent.py`,
+`logger.py` and `tui.py`.
+
+> **Keep the `usage or None` behaviour** at agent.py:217 exactly. `{}` and
+> `None` are not interchangeable downstream: `Logger._execution_metadata`
+> (logger.py:149) returns `{}` early when task, backend *and* usage are all
+> falsy, so an empty dict quietly changes what a response event carries.
+
+### 4.3 `boukensha/models.py` — new
+
+```python
+BACKENDS = (Anthropic, OpenAI, Gemini, Ollama, OllamaCloud)
+TABLE = {model: spec for backend in BACKENDS for model, spec in backend.MODELS.items()}
+DEFAULT_CONTEXT_WINDOW = 32_000
+
+def context_window(model): ...
+def known(model): ...
+```
+
+Import it in `run.py` and re-export from `__init__.py` beside the other public
+names. `backends/base.py` must not import it — that is the cycle.
+
+### 4.4 `context.py`
+
+- `__init__` gains `context_window=200_000`, `compaction_threshold=0.85`; new
+  attributes `current_tokens = 0`, `turn_tokens = 0`
+- `update_tokens(n)`, `reset_turn_tokens()`, `add_turn_tokens(input, output)`
+- `usage_fraction()` — guard `context_window == 0`, or a misconfigured window
+  is a `ZeroDivisionError` mid-turn; `usage_pct()`
+- `needs_compaction(threshold=None)`, defaulting to `self.compaction_threshold`
+- `compact_messages(target_fraction=0.60)` — return `0` when `len <= 2`;
+  `drop = min(ceil(len * (1 - target_fraction)), len - 2)`; snap forward to the
+  first `role == "user"`; slice; zero `current_tokens`; return the count
+- `clear_messages()` also zeroes `current_tokens`
+- `__str__` gains window/current, keeping the existing `task=` field
+
+### 4.5 `tasks/base.py`
+
+- `DEFAULT_MAX_TURN_TOKENS = 60_000`, `DEFAULT_COMPACTION_THRESHOLD = 0.85`
+- `max_turn_tokens(cls, settings)` via the existing `_integer_setting`
+- `compaction_threshold(cls, settings)` needs a **float** reader:
+  `_integer_setting` turns `0.85` into `0`, silently disabling the threshold in
+  the least visible way possible
+
+### 4.6 `agent.py`
+
+- `__init__`: `max_turn_tokens=None` plus `_resolve_max_turn_tokens` beside the
+  two existing resolvers, defaulting to `0` (disabled) with no task settings
+- `run()`: `reset_turn_tokens()` then `_compact_if_needed()` before the loop.
+  **The `cancel_event` check stays first inside the loop** — a cancelled turn
+  must not spend a call, and that ordering is Python-only, so the Ruby diff
+  cannot tell you where it goes
+- `_token_limit_reached()` beside `_iteration_limit_reached()`, logging
+  `limit_reached(kind="max_tokens", ...)` and winding down
+- `_record_usage(response)` through `usage.py`, feeding both `add_turn_tokens`
+  and `update_tokens`
+- `_compact_if_needed()` logging `compaction(before=, dropped=, context_window=)`
+- `_log_reasoning(content)` — one `reasoning` event per block, skipping empty
+  non-redacted ones
+- `_handle_tool_calls`: emit `plan` for any preamble text, then the
+  `(tool use — N calls)` placeholder as today
+- `_extract_text` joins with `"\n"` (Ruby changed this in step 12)
+- `_log_response` takes the **normalized** `stop_reason` from the builder, not
+  `response.get("stop_reason")`
+- the wind-down call records usage too; `turn_end` carries `tokens=`
+
+### 4.7 `logger.py`
+
+- `prompt(..., context_window=)`
+- `compaction(before, dropped, context_window)`, `reasoning(text, redacted=False)`,
+  `plan(text)`
+- everything else unchanged — the cost metadata is already here
+
+### 4.8 `backends/`
+
+- **All five**: map provider thinking output onto
+  `{"type": "reasoning", "text": ..., "signature": ..., "redacted": ...}`, and
+  the inverse when rebuilding assistant turns, so Anthropic signatures and
+  Gemini `thoughtSignature`s round-trip unmodified. Copy the contract docstring
+  onto `Base`.
+- **Ollama**: `"think": False` in the payload; surface `message["thinking"]`.
+- **OpenAI**: move to `/v1/responses` — messages become `input` items, the
+  system prompt becomes a top-level `instructions` string, tool defs lose the
+  `function:` wrapper, and tool results round-trip as `function_call_output`
+  matched by `call_id`. gpt-5.x rejects `reasoning_effort` + tools on
+  `/v1/chat/completions`. **The largest single chunk of this step**, and the
+  only part with no free gate (§6.3).
+- **`MODELS` tables**: open question 1.
+
+### 4.9 `repl.py`
+
+- `/compact` in `handle_command` (repl.py:104), in the `HELP` block
+  (repl.py:30), and in the banner
+- `max_turn_tokens` through `__init__` into the `Agent` built by `run_turn`
+
+### 4.10 `tui.py`
+
+- delete `_session_input_tokens` / `_session_output_tokens` (tui.py:78–79) —
+  they are exactly what step 12 replaces: a session sum that grew unbounded
+  past `/clear` and never described what the next call would send. Read
+  `context.current_tokens` / `context.context_window` instead
+- `_render_status`: `ctx {pct}%` plus a `⚠` at ≥85, keeping `_mud_route()`
+- `_render_progress`: keep the absolute `used/max` on the idle line, add the
+  colour class, and apply both fixes from §2
+- CSS: `#progress.ctx-warn` / `#progress.ctx-alert` (and status-bar
+  equivalents) alongside the existing `.idle` rule
+- `_handle_event`: a `compaction` phase writes
+  `[context compacted — N messages dropped to free space]` into the log —
+  **through the queue like every other event**, since it arrives on the turn
+  thread
+
+### 4.11 `run.py`
+
+In `_build_session` only:
+- `context_window` keyword on `run()` / `repl()`, defaulting to
+  `models.context_window(model)`
+- `Context(..., context_window=..., compaction_threshold=task_class.compaction_threshold(task_settings))`
+- `effective_max_turn_tokens` beside the two existing `effective_*` values, fed
+  into the `Logger` snapshot (with `context_window`), the `Agent`, and the `Repl`
+
+### 4.12 Example, launcher, README
+
+- `examples/example.py` needs no change (`--no-tui` handling is already there)
+- `week1_baseline/bin/python/12_context` — copy `bin/python/11_tui`, change the
+  two path references
+- README: rewrite from Ruby's `12_context/README.md`, keeping this port's
+  conventions (no gem/loader narrative, Textual not charm, and step 11's
+  documented Esc gap stays)
+
+---
+
+## 5. Traps
+
+1. **The import cycle.** `models.py` → `backends` → (must not) → `models`. If
+   `backends/base.py` ever wants a window lookup it already has
+   `self.info["context_window"]`.
+2. **`_integer_setting` for a float threshold.** `0.85` → `0` → compaction
+   disabled, and nothing anywhere says so.
+3. **`usage or None`** — §4.2. The cheapest available way to lose cost metadata.
+4. **Widget mutation from the turn thread.** Unchanged from step 11, now with
+   one more event type. The compaction notice is not special.
+5. **Textual is pinned at 8.2.8.** Verify the class-toggling approach against
+   that version rather than current docs.
+6. **The OpenAI rewrite has no cheap gate.** Port it line-for-line from Ruby
+   and gate the *payload shape*, not the network call (§6.3).
+7. **Compaction fires before the first call of a turn**, on the usage the
+   previous turn ended with. Doing it after the first call means compacting
+   against a number the API has already rejected.
+
+---
+
+## 6. Verification
+
+**6.1 Port the four new Ruby test files** to `unittest` (the convention here —
+`test/test_tui.py:2`), keeping Ruby's names so the suites read side by side:
+
+| Ruby | Python | Covers |
+| --- | --- | --- |
+| `test_context_compaction.rb` | `test/test_context_compaction.py` | token maths, the zero-window guard, drop count, "keep 2", the **no-orphan invariant across 1–20 tool pairs**, first-message-is-user |
+| `test_usage_accounting.rb` | `test/test_usage_accounting.py` | all four provider shapes → the same counts, end to end through a fake client |
+| `test_agent_limits.rb` | `test/test_agent_limits.py` | both ceilings, `0` disables, compaction fires at 90% and not at 10% |
+| `test_models_table.rb` | `test/test_models_table.py` | `Models` agrees with every backend; the configured model resolves |
+
+`/compact` belongs in the existing `test_repl_composability.py`, which already
+drives `handle_command` and asserts nothing reaches stdout when `on_output` is
+registered.
+
+**6.2 Prove the usage gate has teeth.** Before wiring `usage.py` in, run
+`test_usage_accounting.py` against the current `_normalized_usage` path: the
+Gemini and Ollama cases must fail with `turn_tokens == 0`. On the Ruby side
+this took one throwaway script, and it is the only evidence that the test tests
+anything.
+
+**6.3 OpenAI payload shape, offline.** Build a `Context` with a system prompt,
+a user turn, an assistant `tool_use` and its `tool_result`, then assert
+`to_payload` emits `instructions`, `input` items, and a `function_call_output`
+whose `call_id` matches the `tool_use` id. No key, no network — and it is the
+only thing standing between a typo and a 400 from a provider nobody runs daily.
+
+**6.4 Cross-language parity — the strongest free gate in this step.** Both
+languages now derive the same table from the same numbers:
+
+```sh
+# ruby
+ruby -e '...; puts JSON.pretty_generate(Boukensha::Models::TABLE.sort.to_h)'
+# python
+python -c '...; print(json.dumps(dict(sorted(models.TABLE.items())), indent=2))'
+```
+
+The two must be identical (subject to open question 1). Same shape as step 10's
+tool-table diff, and the same two traps: sort both sides, and encode identically.
+
+**6.5 log_viz reads both languages.** `log_viz` already renders `compaction`,
+`reasoning`, `plan`, `cost_usd` and `context_window` — it was written against
+the union, and the merged Ruby step 12 was the first producer of all of it. A
+Python session must render identically: same `phase` strings, same key names,
+same nesting. Run one and open it. **A field name that differs between the two
+ports surfaces here and nowhere else.**
+
+**6.6 Textual headless harness** (`app.run_test()`): drive a fake `Repl` whose
+context reports 50% / 75% / 90% and assert the progress widget carries no
+class, then `ctx-warn`, then `ctx-alert`; enqueue a `compaction` event and
+assert the notice lands in the log. Step 11 established that this is more
+coverage than Ruby has for its own TUI — keep the advantage.
+
+**6.7 `tui=False` still matches step 11's REPL**, apart from the `/compact`
+line in `HELP` and the banner. The step-08 gate, still free.
+
+---
+
+## 7. Acceptance criteria
+
+- `python/12_context` is a copy-plus-delta of `python/11_tui`, with no
+  unrelated file changed and no `agent:` block anywhere.
+- `Models.TABLE` is derived and identical to Ruby's; no window is hand-written
+  in two places.
+- All four provider usage shapes drive the turn budget, the compaction trigger
+  and the TUI counters — proven by a test that fails without `usage.py`.
+- Compaction never orphans a `tool_result` and never leaves an assistant turn
+  first, at every history length tested.
+- Both ceilings stop a turn with the same wind-down call; `0` disables either.
+- A Python session opened in `log_viz` renders exactly as a Ruby one.
+- `list_directory` and `search_files` still exist and are still tested.
+- No new dependency; `textual` stays pinned at 8.2.8.
+
+---
+
+## 8. Open questions
+
+1. **`MODELS` tables — align to Ruby step 12, or keep Python's superset?** They
+   have drifted: Python still carries `gemini-2.5-pro/flash/flash-lite`,
+   `gpt-5.4` and nine Ollama models; Ruby step 12 carries two Gemini 3.x
+   entries, `gpt-5.4-nano` (which Python lacks), and one Ollama model. Now that
+   `Models` is derived, the tables *are* the window lookup — this decides what
+   each language can run, and whether §6.4 can pass at all.
+   **Recommendation: align Python to Ruby step 12** and treat parity as the
+   invariant. Re-adding a local Ollama model is a four-line edit in whichever
+   language needs it; silent drift between the two is what §6.4 exists to catch.
+2. **Does the TUI keep any session-total counter?** Ruby deleted both outright.
+   Python could keep `_session_input_tokens` as a "spent this session" readout,
+   which is genuinely different information from window pressure — but it is a
+   fifth field on a bar §3.3 has just trimmed.
+3. **Version.** Both languages go to `0.12.0`; step 11's open question about
+   `0.11.0` vs the instructor's `0.11.1` is inherited rather than resolved, and
+   this is the moment it either stops mattering or gets fixed.

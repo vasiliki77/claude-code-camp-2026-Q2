@@ -9,38 +9,41 @@ module Boukensha
   # naturally — the agent sees the full transcript each time it is called.
   #
   # Built-in commands (not sent to the agent):
-  #   /help    print the command list
-  #   /clear   wipe conversation history (tools stay registered)
-  #   /exit    leave the REPL
-  #   /quit    alias for /exit
+  #   /help     print the command list
+  #   /clear    wipe conversation history (tools stay registered)
+  #   /compact  drop the oldest messages to free context
+  #   /exit     leave the REPL
+  #   /quit     alias for /exit
   class Repl
     PROMPT = "boukensha> "
 
     HELP = <<~HELP
       Commands:
         /clear    wipe conversation history (tools stay)
-        /compact  drop oldest 40% of messages to free context
+        /compact  drop oldest messages to free context
         /exit     leave the REPL
         /help     show this message
     HELP
 
     attr_reader :logger, :context, :model, :version
 
-    def initialize(context:, registry:, builder:, client:, logger:, config_dir: nil, provider: nil, model: nil, version: nil, api_key: nil, mud: nil, max_iterations: nil, max_turn_tokens: nil, max_output_tokens: nil)
+    def initialize(context:, registry:, builder:, client:, logger:, config_dir: nil, provider: nil, model: nil, version: nil, api_key: nil, mud: nil, mcp: nil, task_settings: nil, max_iterations: nil, max_turn_tokens: nil, max_output_tokens: nil)
       @context    = context
       @registry   = registry
       @builder    = builder
       @client     = client
       @logger     = logger
+      @task_settings     = task_settings
+      @max_iterations    = max_iterations
+      @max_turn_tokens   = max_turn_tokens
+      @max_output_tokens = max_output_tokens
       @config_dir = config_dir
       @provider   = provider
       @model      = model
       @version    = version
       @api_key    = api_key
       @mud        = mud
-      @max_iterations    = max_iterations
-      @max_turn_tokens   = max_turn_tokens
-      @max_output_tokens = max_output_tokens
+      @mcp        = mcp
       @turn       = 0
       @output_cb  = nil
     end
@@ -110,6 +113,7 @@ module Boukensha
         builder:  @builder,
         client:   @client,
         logger:   @logger,
+        task_settings: @task_settings,
         max_iterations:    @max_iterations,
         max_turn_tokens:   @max_turn_tokens,
         max_output_tokens: @max_output_tokens
@@ -159,7 +163,18 @@ module Boukensha
     # Build the mud status string shown in the banner.
     # Only checks TCP reachability — the tool session auto-connects at startup
     # (in Mud.register), so probing login here would cause a double-login.
-    def mud_status_string
+    #
+    # Public because the TUI's always-on status bar derives its route label from
+    # this — the same reason #banner is public. Keeping one source of truth for
+    # "which route is live" matters more here than the visibility: two places
+    # computing it is how a status line ends up disagreeing with reality.
+    public def mud_status_string
+      # The MCP path sets mud: false on purpose (the daemon owns the session, and
+      # registering Tools::Mud as well would open a second connection). Reporting
+      # "(not configured)" then would be actively wrong — the MUD tools are right
+      # there in the registry — so report the route instead.
+      return mcp_status_string unless Array(@mcp).empty?
+
       return "(not configured)" unless @mud
 
       host     = @mud[:host] || "localhost"
@@ -168,6 +183,18 @@ module Boukensha
       password = @mud[:password]
 
       "#{host}:#{port}  #{probe_mud(host, port, name, password)}"
+    end
+
+    # Servers have already handshaked by the time the banner prints
+    # (Tools::Mcp.register completes it), so this reports what is true rather
+    # than probing anything.
+    def mcp_status_string
+      names = Array(@mcp).map do |client|
+        info = client.server_info || {}
+        [info["name"] || "mcp", info["version"]].compact.join(" ")
+      end
+
+      "via #{names.join(', ')} (#{@context.tools.length} tools over MCP)"
     end
 
     def probe_mud(host, port, name, password)

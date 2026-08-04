@@ -57,8 +57,15 @@ module Boukensha
       write_log(phase: "tool_result", name: name, result: result.to_s, ok: ok, error: error)
     end
 
-    def response(text:, usage: nil, stop_reason: nil)
-      write_log(phase: "response", text: text.to_s.strip, usage: usage, stop_reason: stop_reason)
+    def response(text:, usage: nil, stop_reason: nil, task: nil, backend: nil)
+      write_log(
+        {
+          phase: "response",
+          text: text.to_s.strip,
+          usage: usage,
+          stop_reason: stop_reason
+        }.merge(execution_metadata(task: task, backend: backend, usage: usage))
+      )
     end
 
     def reasoning(text:, redacted: false)
@@ -102,6 +109,49 @@ module Boukensha
 
     def serialize_message(msg)
       { role: msg.role, content: msg.content }
+    end
+
+    # Which task, provider and model produced this response, and what it cost.
+    # Carried alongside every response event so a session file can be read back
+    # without inferring any of it from the run that produced it — the model can
+    # change mid-conversation, and cost is only computable while the backend
+    # that knows its own prices is still in scope.
+    def execution_metadata(task:, backend:, usage:)
+      return {} unless task || backend || usage
+
+      tokens = usage_tokens(usage)
+      metadata = {
+        task: task_name(task),
+        provider: provider_name(backend),
+        model: backend&.model,
+        usage_unit: backend&.respond_to?(:usage_unit) ? backend.usage_unit : nil,
+        usage_level: backend&.respond_to?(:usage_level) ? backend.usage_level : nil,
+        input_tokens: tokens[:input],
+        output_tokens: tokens[:output],
+        cost_usd: estimate_cost(backend, tokens)
+      }
+      metadata.compact
+    end
+
+    def task_name(task)
+      task&.respond_to?(:task_name) ? task.task_name : task&.to_s
+    end
+
+    def provider_name(backend)
+      return nil unless backend
+
+      backend.class.name.split("::").last.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase
+    end
+
+    def usage_tokens(usage)
+      Usage.tokens(usage)
+    end
+
+    def estimate_cost(backend, tokens)
+      return nil unless backend&.respond_to?(:estimate_cost)
+      return nil unless tokens[:input] && tokens[:output]
+
+      backend.estimate_cost(input_tokens: tokens[:input], output_tokens: tokens[:output])
     end
   end
 end

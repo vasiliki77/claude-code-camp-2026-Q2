@@ -61,6 +61,7 @@ module Boukensha
         elapsed:            0,
         current_action:     "idle",
         iteration:          0,
+        max_iterations:     0,
         tool_call_count:    0,
         turn_input_tokens:  0,
         turn_output_tokens: 0
@@ -149,7 +150,10 @@ module Boukensha
         frame  = SPINNER_FRAMES[@live[:spinner_idx]]
         action = @live[:current_action]
         iter   = @live[:iteration]
-        max    = Agent::MAX_ITERATIONS
+        # The enforced ceiling comes from the task's settings, so read the one
+        # the agent reported rather than the class default it may have overridden.
+        max    = @live[:max_iterations].to_i
+        max    = Agent::MAX_ITERATIONS unless max.positive?
         secs   = @live[:elapsed].to_i
         itok   = fmt_tokens(@live[:turn_input_tokens])
         otok   = fmt_tokens(@live[:turn_output_tokens])
@@ -176,18 +180,43 @@ module Boukensha
       "#{prompt}#{@textarea.view}"
     end
 
+    # The always-on bar. Five fields plus a clock in a fixed width, so it says
+    # only what has to survive: the percentage the colour coding is *for*, and
+    # which route the tools arrived by. The absolute used/max pair lives on the
+    # progress line instead — it is the first thing to go when the bar and an
+    # 80-column terminal disagree.
     def render_status
       ver   = @repl.version || Boukensha::VERSION
       model = @repl.model   || "(model)"
       pct   = @context.usage_pct
-      used  = fmt_tokens(@context.current_tokens)
-      max   = fmt_tokens(@context.context_window)
       tools = @context.tool_count
       clock = Time.now.strftime("%H:%M:%S")
 
-      ctx_indicator = pct >= CTX_ALERT_PCT ? " ⚠ " : " "
-      bar = " boukensha v#{ver} · #{model}  ·  ctx #{used}/#{max} (#{pct}%)#{ctx_indicator}·  #{tools} tools  ·  #{clock} "
+      ctx_indicator = pct >= CTX_ALERT_PCT ? " ⚠" : ""
+      bar = " boukensha v#{ver} · #{model}  ·  ctx #{pct}%#{ctx_indicator}  ·  #{tools} tools#{mud_route}  ·  #{clock} "
       lip(:white, bg: :bright_black).render(bar.ljust(@width))
+    end
+
+    # Which route the MUD tools arrived by.
+    #
+    # The banner already says this in full, but it is rendered once into the
+    # conversation buffer and scrolls away within a screenful — after which the
+    # only persistent readout is a tool *count*, which cannot distinguish "26
+    # tools from a daemon" from "26 tools in-process" from "26 tools that are
+    # actually the filesystem ones". Step 10 spent real time on exactly that
+    # ambiguity: a status line that described the switched-off route read as
+    # "not configured" while 26 working tools sat in the registry.
+    #
+    # Derived from Repl, not re-computed here — one source of truth for which
+    # route is live.
+    def mud_route
+      status = @repl.mud_status_string
+
+      case status
+      when /over MCP/  then "  ·  mud:mcp"
+      when /not configured/ then ""
+      else "  ·  mud:direct"
+      end
     end
 
     def lip(fg = nil, bg: nil, bold: false)
@@ -264,6 +293,7 @@ module Boukensha
         elapsed:            0,
         current_action:     "Thinking…",
         iteration:          0,
+        max_iterations:     0,
         tool_call_count:    0,
         turn_input_tokens:  0,
         turn_output_tokens: 0
@@ -295,6 +325,7 @@ module Boukensha
       case phase.to_s
       when "iteration"
         @live[:iteration]      = (event[:n] || event["n"]).to_i
+        @live[:max_iterations] = (event[:max] || event["max"]).to_i
         @live[:current_action] = "Thinking…"
 
       when "tool_call"
@@ -308,10 +339,12 @@ module Boukensha
       when "response"
         usage = event[:usage] || event["usage"]
         if usage
-          itu = usage["input_tokens"].to_i
-          otu = usage["output_tokens"].to_i
-          @live[:turn_input_tokens]  += itu
-          @live[:turn_output_tokens] += otu
+          # Through Usage, not usage["input_tokens"]: those are Anthropic's key
+          # names, and the live ↑/↓ counters would read 0 all turn on any other
+          # provider.
+          tokens = Usage.tokens(usage)
+          @live[:turn_input_tokens]  += tokens[:input].to_i
+          @live[:turn_output_tokens] += tokens[:output].to_i
         end
 
       when "compaction"

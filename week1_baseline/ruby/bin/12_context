@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#
+# Step 12 needs the nine charm/bubbletea gems for its TUI, and those are not
+# installed globally — the step only runs under its own bundle. The guard makes
+# a fresh clone work on the first try instead of failing on a missing gem.
+
+set -e
+
+cd "$(dirname "$0")/../12_context"
+bundle check >/dev/null 2>&1 || bundle install
+BOUKENSHA_DIR="${BOUKENSHA_DIR:-$(cd ../../.. && pwd)/.boukensha}" \
+  exec bundle exec ruby examples/example.rb "$@"

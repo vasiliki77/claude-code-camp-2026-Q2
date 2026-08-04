@@ -14,15 +14,16 @@ module Boukensha
     MSG
 
     def initialize(context:, registry:, builder:, client:, logger: Logger.new,
-                   max_iterations: MAX_ITERATIONS, max_turn_tokens: nil, max_output_tokens: nil)
+                   task_settings: nil, max_iterations: nil, max_turn_tokens: nil,
+                   max_output_tokens: nil)
       @context           = context
       @registry          = registry
       @builder           = builder
       @client            = client
       @logger            = logger
-      @max_iterations    = (max_iterations || MAX_ITERATIONS).to_i
-      @max_turn_tokens   = max_turn_tokens.to_i      # 0 = disabled
-      @max_output_tokens = max_output_tokens
+      @max_iterations    = resolve_max_iterations(task_settings, max_iterations)
+      @max_turn_tokens   = resolve_max_turn_tokens(task_settings, max_turn_tokens)  # 0 = disabled
+      @max_output_tokens = resolve_max_output_tokens(task_settings, max_output_tokens)
       @iteration         = 0
     end
 
@@ -58,7 +59,7 @@ module Boukensha
           handle_tool_calls(parsed[:content], response)
         else
           text = extract_text(parsed[:content])
-          @logger.response(text: text, usage: response["usage"], stop_reason: parsed[:stop_reason])
+          log_response(text: text, response: response, stop_reason: parsed[:stop_reason])
           @logger.turn_end(reason: "completed", iterations: @iteration, tokens: @context.turn_tokens)
           @context.add_message(:assistant, text)
           return text
@@ -67,6 +68,30 @@ module Boukensha
     end
 
     private
+
+    # Limits come from the task's settings block unless a caller overrides them
+    # explicitly. One place configures a ceiling — tasks.<name>.* in
+    # settings.yaml — because a second task will want its own.
+    def resolve_max_iterations(task_settings, explicit)
+      return explicit.to_i unless explicit.nil?
+      return @context.task.max_iterations(task_settings) if task_settings && @context.task.respond_to?(:max_iterations)
+
+      MAX_ITERATIONS
+    end
+
+    def resolve_max_turn_tokens(task_settings, explicit)
+      return explicit.to_i unless explicit.nil?
+      return @context.task.max_turn_tokens(task_settings).to_i if task_settings && @context.task.respond_to?(:max_turn_tokens)
+
+      0
+    end
+
+    def resolve_max_output_tokens(task_settings, explicit)
+      return explicit unless explicit.nil?
+      return @context.task.max_output_tokens(task_settings) if task_settings && @context.task.respond_to?(:max_output_tokens)
+
+      nil
+    end
 
     def iteration_limit_reached?
       @max_iterations.positive? && @iteration >= @max_iterations
@@ -85,10 +110,15 @@ module Boukensha
     # budget) and refresh the known context size from input_tokens (compaction
     # pressure). The trigger is evaluated on pre-wrap-up spend; the reported
     # total includes the wind-down call too.
+    #
+    # Goes through Usage rather than reading response["usage"]["input_tokens"]
+    # directly: those are Anthropic's key names, and on Gemini or Ollama both
+    # counters would sit at zero forever — no error, just a token budget that
+    # never trips and a compaction trigger that never fires.
     def record_usage(response)
-      usage = response["usage"] || {}
-      @context.add_turn_tokens(usage["input_tokens"], usage["output_tokens"])
-      @context.update_tokens(usage["input_tokens"].to_i)
+      tokens = Usage.tokens(Usage.envelope(response))
+      @context.add_turn_tokens(tokens[:input], tokens[:output])
+      @context.update_tokens(tokens[:input].to_i)
     end
 
     def compact_if_needed
@@ -111,7 +141,7 @@ module Boukensha
       text        = extract_text(parsed_wrap[:content])
       text        = fallback_message(reason) if text.strip.empty?
       record_usage(response)
-      @logger.response(text: text, usage: response["usage"], stop_reason: parsed_wrap[:stop_reason])
+      log_response(text: text, response: response, stop_reason: parsed_wrap[:stop_reason])
       @logger.turn_end(reason: reason, iterations: @iteration, tokens: @context.turn_tokens)
       @context.add_message(:assistant, text)
       text
@@ -154,7 +184,11 @@ module Boukensha
       # the placeholder below owns the turn's usage chip), then the placeholder.
       preamble = extract_text(content)
       @logger.plan(text: preamble) unless preamble.strip.empty?
-      @logger.response(text: "(tool use — #{tool_calls.size} call#{'s' if tool_calls.size != 1})", usage: response["usage"], stop_reason: "tool_use")
+      log_response(
+        text: "(tool use — #{tool_calls.size} call#{'s' if tool_calls.size != 1})",
+        response: response,
+        stop_reason: "tool_use"
+      )
 
       @context.add_message(:assistant, content)
 
@@ -174,6 +208,21 @@ module Boukensha
 
         @context.add_message(:tool_result, result.to_s, tool_use_id: use_id)
       end
+    end
+
+    # Every response event carries who produced it and what it cost. The task
+    # and backend are only knowable here — a session file read back later has no
+    # other way to learn which model answered, and the model can change
+    # mid-conversation. stop_reason is the *normalized* one from the builder,
+    # not the provider's raw string.
+    def log_response(text:, response:, stop_reason:)
+      @logger.response(
+        text: text,
+        usage: Usage.envelope(response),
+        stop_reason: stop_reason,
+        task: @context.task,
+        backend: @builder.backend
+      )
     end
   end
 end

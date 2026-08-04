@@ -4,6 +4,13 @@ tasks:
     model: claude-haiku-4-5
     prompt_override:
       system: true
+    # Per-turn ceilings, all optional — the defaults shown are what step 12
+    # uses when the key is absent. 0 disables a ceiling.
+    # max_iterations: 25         # tool-call ceiling for one turn
+    # max_turn_tokens: 60000     # input+output tokens one turn may spend
+    # max_output_tokens: 1024    # per-call output cap
+    # compaction_threshold: 0.85 # fraction of the context window; lower it to
+    #                            # watch compaction fire without a long session
 mud:
   host: localhost
   port: 4000
