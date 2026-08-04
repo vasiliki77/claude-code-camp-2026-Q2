@@ -9,7 +9,7 @@ Bootcamp learning log under [`docs/technical_journal/`](docs/technical_journal/)
   - [20-07-2026](docs/technical_journal/20-07-2026.md) — Repository setup, environment setup, Architecture 1 (Plain Agent File).
   - [21-07-2026](docs/technical_journal/21-07-2026.md) — Architecture 2 (Agent Skills), memory/goal tracking, the dungeon-trap and town-guard incidents, Architecture 3a (subagent port).
   - [22-07-2026](docs/technical_journal/22-07-2026.md) — Architecture 3b (programmatic `AgentDefinition`), Architecture 4 (n8n, blocked on API credits).
-- [Week 1 summary](docs/technical_journal/week1.md) — plan: build the Baseline Agent (no SDK) in Ruby, then port.
+- [Week 1 summary](docs/technical_journal/week1.md) — the Baseline Agent (no SDK), steps 0–12 in Ruby and ported to Python: what an SDK hides turned out to be where every expensive bug lived, the MUD gem is reusable from Python as a *process* rather than a library, and porting is best understood as a code review of the original.
   - [24-07-2026](docs/technical_journal/24-07-2026.md) — Step 0 (Configuration): missing `dotenv` gem, `settings.yaml` filename/location fix.
   - [27-07-2026](docs/technical_journal/27-07-2026.md) — Step 1 (Struct Skeleton): Ruby → Python port of the `Tool`/`Message`/`Context` data containers.
   - [28-07-2026](docs/technical_journal/28-07-2026.md) — Step 2 (The Tool Registry): Ruby → Python port of `Registry`/`UnknownToolError`, block → decorator, stale Ruby README output.
