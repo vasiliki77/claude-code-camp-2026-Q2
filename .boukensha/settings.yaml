@@ -9,3 +9,23 @@ mud:
   port: 4000
   username: dummy
   password: helloworld
+
+# MCP servers, as data rather than code. Each entry is one subprocess.
+# Register them with `mcp: true` (the "mud" entry) or BOUKENSHA_MCP=1.
+mcp_servers:
+  mud:
+    command: mud-manager
+    args: [--mcp]
+    # Prefixed by MUD engine, so tools arrive as tbamud__look, tbamud__attack.
+    # Applied client-side — the daemon still advertises bare names on the wire.
+    prefix: tbamud
+    # env is layered over the mud: block above, so credentials are not repeated.
+
+  # A third-party server needs no boukensha code — only an entry here.
+  # required: false means a failure to spawn warns and is skipped, rather than
+  # stopping the agent from starting.
+  # filesystem:
+  #   command:  npx
+  #   args:     [-y, "@modelcontextprotocol/server-filesystem", /tmp]
+  #   prefix:   fs
+  #   required: false

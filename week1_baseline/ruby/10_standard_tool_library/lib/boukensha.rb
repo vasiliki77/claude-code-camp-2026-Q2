@@ -50,6 +50,18 @@ module Boukensha
   #                   tools and keeps a single session alive across every tool call.
   #                   When nil (default), config.mud_* values are used if mud_host
   #                   is set in settings.yaml. Pass mud: false to disable entirely.
+  #
+  # mcp:              Hash of MCP server options — { command:, args:, env:, prefix: }.
+  #                   Spawns that server as a subprocess and registers whatever
+  #                   tools it advertises. The alternative route to the same MUD
+  #                   tools: `mud:` links MudManager into this process, `mcp:`
+  #                   talks to the `mud-manager` daemon that owns the session.
+  #                   Pass mcp: true for the daemon with settings from config.
+  #                   nil (default) registers nothing.
+  #
+  #                   Enabling both `mud:` and `mcp:` without a prefix registers
+  #                   the same 26 names twice and the MCP ones win — pass
+  #                   mud: false, or give the MCP tools a prefix.
   def self.run(
     task:,
     system:           nil,
@@ -63,6 +75,7 @@ module Boukensha
     allowed_commands: nil,
     shell_timeout:    30,
     mud:              nil,
+    mcp:              nil,
     &block
   )
     cfg           = config                           # loads .env; populates ENV
@@ -90,6 +103,8 @@ module Boukensha
     # mud: nil means "use config if host is set"; mud: false means "skip entirely"
     resolved_mud = mud == false ? nil : (mud || mud_opts_from_config(cfg))
     Tools::Mud.register(registry, **resolved_mud) if resolved_mud
+
+    mcp_clients = register_all_mcp(registry, mcp, cfg)
 
     RunDSL.new(registry).instance_eval(&block) if block
 
@@ -120,6 +135,11 @@ module Boukensha
     agent.run
   ensure
     logger&.close
+    # MCP servers are our child processes; leaving one running would leak both a
+    # process and whatever connection it holds. Subprocess lifetime is session
+    # lifetime, which is only true if somebody actually ends it. Close them all
+    # even if one raises on the way out.
+    close_mcp_clients(mcp_clients)
   end
 
   # Interactive REPL — see Boukensha.run for full option documentation.
@@ -135,6 +155,7 @@ module Boukensha
     allowed_commands: nil,
     shell_timeout:    30,
     mud:              nil,
+    mcp:              nil,
     &block
   )
     cfg           = config                           # loads .env; populates ENV
@@ -161,6 +182,8 @@ module Boukensha
 
     resolved_mud = mud == false ? nil : (mud || mud_opts_from_config(cfg))
     Tools::Mud.register(registry, **resolved_mud) if resolved_mud
+
+    mcp_clients = register_all_mcp(registry, mcp, cfg)
 
     RunDSL.new(registry).instance_eval(&block) if block
 
@@ -199,13 +222,142 @@ module Boukensha
       model:      model,
       version:    VERSION,
       api_key:    api_key,
-      mud:        resolved_mud
+      mud:        resolved_mud,
+      mcp:        mcp_clients
     ).start
   rescue Interrupt
     puts "\nInterrupted."
   ensure
     logger&.close
+    close_mcp_clients(mcp_clients)
   end
+
+  # One server failing to shut down must not strand the others.
+  def self.close_mcp_clients(clients)
+    Array(clients).each do |c|
+      c.close
+    rescue StandardError => e
+      warn "[boukensha] error closing MCP server: #{e.message}"
+    end
+  end
+  private_class_method :close_mcp_clients
+
+  # Default prefix for the MUD server's tools.
+  #
+  # Named after the *engine*, not the config key: a second entry called "mud" is
+  # plausible, a second tbaMUD is not, and scoping by engine keeps names
+  # distinct without inventing a taxonomy. This string lives here and in
+  # settings.yaml only — Tools::Mcp applies whatever prefix it is handed and
+  # must never know the word "tbamud".
+  MUD_PREFIX = "tbamud".freeze
+
+  # Resolve the mcp: option into Tools::Mcp.register keyword arguments.
+  #
+  #   nil / false  -> no MCP tools
+  #   true         -> the MUD server: the mcp_servers["mud"] entry if there is
+  #                   one, else a preset built from the mud: block
+  #   Hash         -> passed through, with command/args defaulted
+  #
+  # The `true` case is the preset. It exists so that turning the daemon on costs
+  # no configuration at all, by translating the same settings.yaml `mud:` block
+  # that Tools::Mud reads into the environment variables the daemon expects
+  # (generic_interfacing §5 — credentials reach the server through its
+  # environment, never as tool arguments).
+  def self.mcp_opts(mcp, cfg)
+    return nil if mcp.nil? || mcp == false
+
+    defaults = mud_server_from_config(cfg) || {
+      command:  ENV["MUD_MANAGER_BIN"] || "mud-manager",
+      args:     ["--mcp"],
+      env:      mud_env_from_config(cfg),
+      prefix:   MUD_PREFIX,
+      required: true,
+      label:    "mud"
+    }
+
+    mcp == true ? defaults : defaults.merge(mcp)
+  end
+  private_class_method :mcp_opts
+
+  # An explicit mcp_servers["mud"] entry wins over the preset — it is the more
+  # specific statement of intent. Its env is layered *over* the mud: block so a
+  # partial entry (command and prefix only) still gets credentials.
+  def self.mud_server_from_config(cfg)
+    entry = cfg.mcp_servers["mud"]
+    return nil unless entry && entry[:command]
+
+    entry.merge(
+      env:   mud_env_from_config(cfg).merge(entry[:env] || {}),
+      label: "mud"
+    )
+  end
+  private_class_method :mud_server_from_config
+
+  # Register the MUD server (if mcp: asked for it) plus every other mcp_servers
+  # entry. Returns the live clients, which the caller must close.
+  #
+  # Servers are spawned eagerly, at registration: you cannot register tools you
+  # have not discovered, and discovery needs a running server. That means N
+  # servers cost N spawns at boot even for ones the model never calls — fine at
+  # one or two, worth revisiting beyond that. "Lazy" would really mean
+  # "register from a cached manifest", which is a much larger change.
+  #
+  # required: true (the default) means a failure to spawn raises — you
+  # configured it, so its absence is a problem you want to hear about.
+  # required: false means warn and carry on, which is right for a decorative
+  # server whose tools the agent can do without.
+  def self.register_all_mcp(registry, mcp, cfg)
+    entries = []
+
+    # "mud" is owned by the mcp: option / BOUKENSHA_MCP, not by the generic
+    # loop, so it is resolved separately and skipped below.
+    if (mud_entry = mcp_opts(mcp, cfg))
+      entries << mud_entry
+    end
+
+    cfg.mcp_servers.each do |name, entry|
+      next if name == "mud"
+      next if entry[:command].to_s.empty?
+
+      entries << entry.merge(label: name)
+    end
+
+    entries.each_with_object([]) do |entry, clients|
+      args = entry.slice(:command, :args, :env, :prefix, :label)
+      args[:args] ||= []
+      args[:env]  ||= {}
+
+      begin
+        clients << Tools::Mcp.register(registry, **args)
+      rescue StandardError => e
+        raise if entry.fetch(:required, true)
+
+        warn "[boukensha] optional MCP server #{entry[:label].inspect} failed to start: " \
+             "#{e.message} — continuing without its tools"
+      end
+    end
+  end
+  private_class_method :register_all_mcp
+
+  # The daemon reads MUD_* from its environment. Only send what is actually
+  # configured — an empty string would override the daemon's own defaults with
+  # nothing, which is worse than being absent.
+  #
+  # An inherited MUD_* wins over config. The child's environment is these values
+  # merged *over* the parent's, so taking ENV first is what keeps the documented
+  # precedence ("env vars take precedence over config") true across the process
+  # boundary. Reading config first would silently invert it, and only for the
+  # MCP path — the in-process path would still honour the env var, so the two
+  # routes to the same tools would disagree about which credentials to use.
+  def self.mud_env_from_config(cfg)
+    {
+      "MUD_HOST"     => ENV["MUD_HOST"]     || cfg.mud_host,
+      "MUD_PORT"     => ENV["MUD_PORT"]     || cfg.mud_port&.to_s,
+      "MUD_NAME"     => ENV["MUD_NAME"]     || cfg.mud_username,
+      "MUD_PASSWORD" => ENV["MUD_PASSWORD"] || cfg.mud_password
+    }.compact
+  end
+  private_class_method :mud_env_from_config
 
   # Build a mud options hash from config (used when mud: nil is passed to run/repl).
   # Returns nil if no MUD host is configured.
@@ -242,3 +394,4 @@ require_relative "boukensha/repl"
 require_relative "boukensha/tools/file_system"
 require_relative "boukensha/tools/shell"
 require_relative "boukensha/tools/mud"
+require_relative "boukensha/tools/mcp"

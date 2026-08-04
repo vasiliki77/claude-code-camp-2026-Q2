@@ -1,0 +1,19 @@
+require "rake/testtask"
+
+Rake::TestTask.new(:test) do |t|
+  t.libs << "lib" << "test"
+  t.test_files = FileList["test/test_*.rb"]
+  t.warning = false
+end
+
+desc "Regenerate primitives.json from MudManager::Primitives (Ruby is canonical)"
+task :spec do
+  ruby "bin/mud-manager --write-spec"
+end
+
+desc "List the tools the daemon serves"
+task :tools do
+  ruby "bin/mud-manager --list-tools"
+end
+
+task default: :test

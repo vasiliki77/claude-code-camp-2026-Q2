@@ -1,0 +1,157 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+#
+# mud-manager — the one process that owns a MUD session.
+#
+# Plan §4: this binary is the answer to "where does the stateful Session live,
+# and how do foreign-language agents drive it?" It lives here, once, and agents
+# in any language drive it over stdio.
+#
+#   mud-manager --mcp           MCP server (JSON-RPC 2.0). The blessed interface:
+#                               an agent framework spawns this as a subprocess and
+#                               gets typed MUD tools with no protocol code.
+#   mud-manager --stdio-json    The bespoke newline-delimited JSON protocol.
+#                               Lower-level escape hatch and teaching artifact.
+#   mud-manager --list-tools    Print the tool surface and exit.
+#   mud-manager --dump-spec     Print primitives.json to stdout.
+#   mud-manager --write-spec    Regenerate primitives.json in the gem.
+#   mud-manager --version       Print the version and exit.
+#
+# Connection settings come from the environment, never from tool arguments
+# (plan §5): MUD_HOST, MUD_PORT, MUD_NAME, MUD_PASSWORD, MUD_TIMEOUT — or the
+# `mud:` block of <BOUKENSHA_DIR>/settings.yaml.
+
+# Work from a source checkout as well as an installed gem. Running from source
+# is the common case during the bootcamp, and requiring an install first is the
+# kind of friction the single-gem decision exists to remove.
+lib = File.expand_path("../lib", __dir__)
+$LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
+
+require "mud_manager"
+
+USAGE = <<~TEXT
+  Usage: mud-manager [MODE]
+
+  Modes:
+    --mcp             Serve MCP (JSON-RPC 2.0) over stdio  [default]
+    --stdio-json      Serve the newline-delimited JSON protocol over stdio
+    --list-tools      List the served tools and exit
+    --dump-spec       Print primitives.json to stdout and exit
+    --write-spec      Regenerate primitives.json in the gem and exit
+    --config          Print the resolved connection config and exit
+    --version         Print version and exit
+    --help            Show this message
+
+  Environment:
+    MUD_HOST      MUD hostname                (default: localhost)
+    MUD_PORT      MUD port                    (default: 4000)
+    MUD_NAME      character name              (required to play)
+    MUD_PASSWORD  character password          (required to play)
+    MUD_TIMEOUT   read timeout in seconds     (default: 10.0)
+    BOUKENSHA_DIR directory holding settings.yaml, whose `mud:` block is
+                  used for any value not set above
+TEXT
+
+mode = ARGV[0] || "--mcp"
+
+case mode
+when "--help", "-h"
+  puts USAGE
+  exit 0
+
+when "--version", "-v"
+  puts "mud-manager #{MudManager::VERSION}"
+  exit 0
+
+when "--dump-spec"
+  print MudManager::Mcp::Spec.to_json_text
+  exit 0
+
+when "--write-spec"
+  path = MudManager::Mcp::Spec.write(MudManager::Mcp::Spec.default_path)
+  warn "wrote #{path}"
+  exit 0
+
+when "--list-tools"
+  tools = MudManager::Mcp::ToolSpec.tools
+  tools.group_by { |t| t["group"] }.each do |group, group_tools|
+    puts group
+    group_tools.each do |t|
+      args = t["args"].map { |name, spec| spec["required"] ? "#{name}*" : name }.join(", ")
+      puts format("  %-16s %s", t["name"], args.empty? ? "-" : args)
+    end
+  end
+  puts
+  puts "#{tools.length} tools (* = required)"
+  exit 0
+
+when "--config"
+  config = MudManager::Mcp::Config.new
+  puts config
+  puts config.credentials? ? "credentials: set" : "credentials: #{config.missing_credentials_message}"
+  exit 0
+
+when "--mcp", "--stdio-json"
+  # fall through to serve
+
+else
+  warn "unknown mode #{mode.inspect}"
+  warn USAGE
+  exit 2
+end
+
+# stdout is the protocol channel from here on. Nothing else may write to it —
+# a stray `puts` corrupts the frame stream and clients fail in ways that look
+# like the MUD misbehaving. Diagnostics go to stderr.
+$stdout.sync = true
+$stderr.sync = true
+
+# A stdio server started from an interactive shell is indistinguishable from a
+# hang: it prints nothing and waits on stdin forever. That is correct
+# behaviour and a terrible first experience, so say so — on stderr, which is
+# not the protocol channel, and only when a human is plausibly watching.
+if $stdin.tty?
+  protocol = mode == "--mcp" ? "MCP (JSON-RPC 2.0)" : "newline-delimited JSON"
+  example =
+    if mode == "--mcp"
+      '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+    else
+      '{"id":1,"op":"tools"}'
+    end
+
+  warn <<~HINT
+    [mud-manager] Serving #{protocol} on stdin/stdout. This is not an interactive
+    program — it waits for protocol frames, one JSON object per line, and is
+    normally spawned as a subprocess by an agent rather than run by hand.
+
+    Nothing is wrong. To see it respond, paste a frame and press enter:
+
+      #{example}
+
+    Or drive it from a shell:
+
+      echo '#{example}' | mud-manager #{mode}
+
+    Human-readable alternatives: --list-tools, --config, --dump-spec.
+    Ctrl-D to exit.
+  HINT
+end
+
+config = MudManager::Mcp::Config.new
+dispatcher = MudManager::Mcp.dispatcher(config)
+
+server =
+  if mode == "--mcp"
+    MudManager::Mcp::Server.new(dispatcher)
+  else
+    MudManager::Mcp::JsonLineServer.new(dispatcher)
+  end
+
+# A dropped stdin (parent exited) is a normal shutdown, not a crash.
+begin
+  server.run
+rescue Interrupt, Errno::EPIPE
+  exit 0
+ensure
+  dispatcher.pool.close_all
+end

@@ -142,7 +142,11 @@ module MudManager
             return out
           end
           remaining = deadline - monotime
-          raise Timeout, "read_until #{pattern.inspect} after #{timeout}s" if remaining <= 0
+          # Report the timeout that was actually enforced. Interpolating the
+          # `timeout:` argument printed "after s" whenever a caller relied on
+          # the default — which is most of them — hiding the one number needed
+          # to tell "too slow" apart from "waiting for the wrong thing".
+          raise Timeout, "read_until #{pattern.inspect} after #{timeout || @timeout}s" if remaining <= 0
           raise ConnectionError, "socket closed while waiting" if @closed
           @buffer_cv.wait(@buffer_mu, remaining)
         end
@@ -178,8 +182,18 @@ module MudManager
       # Enter Password
       self.send_command(password)
 
-      output = self.read_until(/Welcome|Reconnecting|Wrong password/i)
-      if output =~ /Reconnecting/i
+      # tbaMUD has *three* ways of saying "you are already in the world", not
+      # two. Besides "Reconnecting" it may answer:
+      #
+      #   You take over your own body, already in use!
+      #
+      # which happens when the character is still linkdead from a previous
+      # connection — routine when a daemon has just exited, or when the MCP and
+      # in-process paths are used in quick succession. Without this pattern the
+      # read blocks for the full timeout and login fails with a Timeout that
+      # names the wrong problem.
+      output = self.read_until(/Welcome|Reconnecting|already in use|Wrong password/i)
+      if output =~ /Reconnecting|already in use/i
         # already in-world, skip menu
       elsif output =~ /Welcome/i
         # fresh login, handle menu
