@@ -1,0 +1,244 @@
+# Port Plan — Step 10: A Standard Tool Library (Ruby → Python)
+
+Port the tool library — filesystem tools, shell tools, and MUD gameplay tools —
+plus the config, wiring and REPL changes that carry them.
+
+This is the tenth of thirteen steps. **Step 09 is skipped** (see below), so this
+is the first step whose Python folder is a copy of a non-adjacent Ruby step.
+
+> **The headline: the largest file in Ruby step 10 must not be ported.**
+> `tools/mud.rb` is 480 lines of MUD gameplay tools built directly on the
+> `mud_manager` gem. Python has no such gem and is not getting one. It obtains
+> **the same 26 tools** by spawning `mud-manager --mcp` and asking it what it
+> has. That is not a shortcut around the port — it is the entire reason the MCP
+> daemon was built (`generic_interfacing` §7: *"Python / Go / Rust / Java: point
+> the framework's MCP client at `mud-manager --mcp`. Zero MUD/telnet code."*).
+> This step is where that claim gets tested by a second language for the first
+> time.
+
+---
+
+## Starting state (already done — do not redo)
+
+`week1_baseline/python/10_standard_tool_library/` **already exists** as a clean
+copy of `python/08_the_repl_loop/` — verified: `diff -rq --exclude=__pycache__`
+is empty.
+
+`week1_baseline/bin/ruby/10_standard_tool_library` exists and runs.
+`bin/python/10_standard_tool_library` does **not** exist yet.
+
+`mud-manager` 0.2.0 is installed and on PATH; `mud-manager --list-tools` prints
+26. The repo-root `.venv/` needs no new packages — everything below is stdlib.
+
+### Why step 09 is skipped
+
+Step 09 is a Ruby *packaging* lesson: gemspec, shebang, `gem build`/`gem
+install`, and a loader whose only job is choosing among twelve numbered teaching
+folders. Its Python analogue is `pyproject.toml` with `[project.scripts]` — a
+different toolchain, not a port. The half that mattered was already solved:
+`bin/python/*` exports `BOUKENSHA_DIR` with the same precedence as
+`bin/ruby/*`.
+
+**Consequence for this step:** Ruby 10 contains `lib/boukensha_loader.rb`,
+`boukensha.gemspec` and `bin/boukensha`, all inherited from step 09. **None of
+the three is ported.** Do not treat their absence from the Python folder as an
+omission to fix later.
+
+---
+
+## Decisions (carried over — settled, do not re-litigate)
+
+- One shared `.venv/` at the repo root; `pip` + `requirements.txt`.
+- Self-contained snapshot per step — duplication across steps is intentional.
+- Ruby blocks become Python decorators (`@registry.tool(...)`).
+- `instance_eval` has no Python equivalent — the DSL object is an explicit
+  parameter. Settled in step 07.
+- Ruby's `!`/`?` map to `set_`/`is_`.
+- **Match Ruby's semantics, not a rule about `is None`.** Steps 03–06 each needed
+  an explicit `is None`; step 07 needed `or`. Decide per site.
+
+---
+
+## What actually changes
+
+Ruby's delta from step 08 to step 10, and what Python does with each.
+
+| Ruby file | Lines | Python action |
+| --- | --- | --- |
+| `tools/file_system.rb` | 148 | **Port.** `tools/file_system.py` |
+| `tools/shell.rb` | 71 | **Port.** `tools/shell.py` |
+| `tools/mud.rb` | 480 | **Do not port.** Replaced by the MCP path |
+| `tools/mcp.rb` | 113 | **Port.** `tools/mcp.py` — the replacement |
+| `mcp/client.rb` | 204 | **Port.** `mcp/client.py` — stdio MCP client |
+| `boukensha.rb` | +208 | **Port selectively** — the `mud:` wiring goes, `mcp:` stays |
+| `config.rb` | +53 | **Port.** `mud_*` readers + `mcp_servers` |
+| `repl.rb` | +52 | **Port.** banner status for both routes |
+| `registry.rb` | +5 | **Port.** `context` reader, for collision detection |
+| `context.rb` | +1 | **Port.** `working_dir` |
+| `boukensha_loader.rb` | 76 | **Skip** — step 09 packaging |
+| `boukensha.gemspec`, `bin/` | — | **Skip** — Ruby packaging |
+| `client.rb` | −3 | **See OQ 1** — step 10 *lost* step 08's 401 handling |
+| `test/`, `examples/mcp_mud_demo.rb` | 324 | **Port** — see verification |
+
+Net: Ruby adds ~1,000 lines of library code here; Python needs about 520 of it,
+and the difference is almost entirely `tools/mud.rb`.
+
+---
+
+## The MUD tools: what replaces 480 lines
+
+Ruby step 10 registers 26 MUD tools by hand, each one calling
+`MudManager::Primitives` and driving a `MudManager::Session` held in a closure.
+Python registers the same 26 by asking a running server:
+
+```
+Python agent  ──spawn──►  mud-manager --mcp  ──telnet──►  MUD
+              ◄─stdio──   (Ruby, already built)
+```
+
+`tools/mcp.py` must contain **no MUD knowledge**: no telnet, no primitives, no
+login, not one tool name. It knows a command to spawn and it knows MCP. This is
+the same constraint the Ruby version is under, and it is testable — see the
+calculator server below.
+
+Two consequences worth stating plainly:
+
+- **Python never needs the `mud_manager` gem installed as a library**, only the
+  `mud-manager` binary on PATH. A Python bootcamper needs a Ruby *runtime*, not
+  a Ruby *toolchain* or any Ruby knowledge.
+- **Tool names carry the `tbamud__` prefix** on both sides (`tbamud__look`), so
+  the two languages' registries should be comparable name-for-name.
+
+---
+
+## Python traps specific to this step
+
+Written down before the code, because the week's pattern is that traps recorded
+in advance stop being bugs.
+
+**1. `None` and `False` are both falsy — Ruby's `nil` and `false` are not
+interchangeable here.** Ruby distinguishes three states on both options:
+
+```ruby
+mud: nil    # use config if a host is set
+mud: false  # skip entirely
+mud: {...}  # explicit
+```
+
+A naive `if not mud:` collapses the first two and silently changes behaviour.
+Use `is None` / `is False` identity checks. **This is the most likely bug in the
+whole step** and it is invisible in normal use — it only shows when someone
+explicitly disables a route.
+
+**2. Line-buffered pipes.** Ruby's `Open3.popen3` + `puts`/`gets` works on line
+boundaries by default. Python's `subprocess.Popen` needs `text=True` and
+`bufsize=1`, and every write needs an explicit `flush()`. A missing flush
+deadlocks: the parent waits for a reply to a frame the child never received.
+
+**3. The stderr drain thread is not optional.** Ruby uses a `Thread` to drain the
+child's stderr so a chatty server cannot fill the pipe buffer and deadlock the
+conversation on stdout. Python needs `threading.Thread(daemon=True)` doing the
+same. Omitting it works in tests and hangs in production, which is the worst
+possible failure schedule.
+
+**4. Ruby's `ensure` vs Python's `finally` for client shutdown.** Ruby assigns
+`mcp_clients` before the `begin` so `ensure` can close them even if construction
+raised. Python needs the same discipline — initialise to `[]` before the `try`.
+Same shape as the `logger = None` fix in step 07's `run.py`.
+
+**5. Shell tool timeouts.** Ruby wraps `Open3` with its own timeout handling;
+Python has `subprocess.run(timeout=...)` which raises `TimeoutExpired` and leaves
+the child running unless you kill it. Not equivalent — read the Ruby carefully.
+
+**6. Path containment for filesystem tools.** Both languages must reject paths
+escaping `working_dir`. Ruby uses `File.expand_path` comparisons; Python's
+`Path.resolve()` differs on symlinks and on non-existent paths. Test the escape,
+and **do not let the test read its own documentation** — step 07's escape check
+failed identically in both languages because the README describing it became the
+test data.
+
+**7. YAML keys.** Ruby's `Config#dig` tries string *and* symbol keys because Ruby
+YAML can produce either. Python's `yaml.safe_load` produces strings only, so the
+dual lookup disappears — the same way step 02's symbol-conversion gotcha
+disappeared. Say so in the README rather than porting dead code.
+
+---
+
+## Verification
+
+Each step's gate has to be derived from what that step *produces*. Step 10
+produces **tool registrations**, and most of that is deterministic and free.
+
+**Gate 1 — the tool table, diffed across languages.** Register every tool in both
+implementations and dump `name`, parameter names, types, enums and descriptions
+as sorted JSON. No API calls, no model, fully deterministic. This is the
+strongest gate available since step 03 and it covers filesystem, shell and MUD
+tools at once.
+
+**Gate 2 — the daemon is language-neutral, so point both at it.** Ruby and Python
+drive the *same* `mud-manager --mcp` process against the same `FakeMud`. Their
+discovered tool tables must be byte-identical, because both got them from the
+same server. **A difference here is a bug in the client, never in the tools** —
+which makes this gate unusually good at localising failure.
+
+**Gate 3 — a non-MUD MCP server.** Port `test/support/tiny_mcp_server.rb` to
+Python (or reuse the Ruby one — it is a subprocess, the language is irrelevant).
+Registering a two-tool calculator proves `tools/mcp.py` is generic by
+demonstration rather than by comment. If MUD assumptions creep in, this fails.
+
+**Gate 4 — filesystem and shell tools are deterministic.** Direct output diff,
+no special handling needed. The first time since step 03 that a whole subsystem
+can be gated on stdout again.
+
+**Gate 5 — `--dry` example.** Ruby's `examples/mcp_mud_demo.rb --dry` prints the
+daemon info, 26 prefixed tool names and a dispatch result with no API calls.
+Port it; the outputs should match.
+
+**Not gated:** anything requiring the model to *choose* a tool. That is
+non-deterministic and billable, and steps 04–08 already established it cannot be
+diffed.
+
+---
+
+## Open questions
+
+1. **Step 10's `client.rb` dropped step 08's 401 handling.** Ruby 08 raises
+   `ApiError, "authentication failed (401) — check your API key"`; Ruby 10 does
+   not. This is the same non-linearity as step 07 branching from 04/05 — the
+   Ruby steps are snapshots, not a progression. **Mirror the regression, or keep
+   step 08's better behaviour on the Python side?** Precedent exists for both:
+   `to_messages` was mirrored, `PROMPTS_DIR` was fixed by decision.
+
+2. **Does Python register the MUD via `mcp: true` or via `mcp_servers`?** Ruby
+   supports both, with the config entry winning. Porting both doubles the
+   surface; porting only the config path is cleaner but diverges.
+
+3. **Does Python's step 10 ship tests?** Ruby's only acquired them today, and no
+   earlier Python step has a `test/` directory — verification has lived in
+   throwaway scratch scripts. Gates 1–3 above are worth keeping permanently,
+   which argues for a real test directory and a change of habit.
+
+4. **`tools/mud.rb` has no Python counterpart at all.** Should
+   `python/10_standard_tool_library/README.md` state that explicitly? **Yes** —
+   otherwise a reader diffing the two trees sees a 480-line hole and reads it as
+   an unfinished port. The same reasoning that made step 02's README explain the
+   symbol-conversion lesson it does not have.
+
+---
+
+## Risks
+
+- **The `None`/`False` collapse (trap 1) is silent.** It will pass every test
+  that does not explicitly disable a route, and change behaviour for anyone who
+  does. Test both disable paths explicitly.
+- **Deadlocks pass in CI and hang for a user.** Traps 2 and 3 both fail that
+  way. Any test that spawns the daemon needs a timeout so a hang reports as a
+  failure rather than a stuck run.
+- **Two clients now exist in Ruby and a third will exist in Python.** They are
+  deliberately duplicated (`generic_mcp_client.md` §5d: the daemon must not
+  depend on boukensha). Python's is a fourth stdio client in the repo. Expect
+  drift; do not try to share them.
+- **Scope creep toward the backend.** Two pre-existing defects will be visible
+  while porting schemas — every parameter advertised as required, and tool
+  results coerced to strings. Both affect all tools, both need their own plan.
+  Resist.

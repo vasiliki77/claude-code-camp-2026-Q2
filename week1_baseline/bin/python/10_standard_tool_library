@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+venv_python="$REPO_ROOT/.venv/bin/python"
+
+if [[ ! -x "$venv_python" ]]; then
+  echo "No virtualenv found at $REPO_ROOT/.venv" >&2
+  echo "Create it once from the repo root:" >&2
+  echo "  python3 -m venv .venv" >&2
+  echo "  .venv/bin/pip install -r week1_baseline/python/10_standard_tool_library/requirements.txt" >&2
+  exit 1
+fi
+
+# The config directory the example reads. Assigned with `:=` so an externally
+# set BOUKENSHA_DIR still wins — the same precedence the examples used to get
+# from os.environ.setdefault, now resolved once here instead of counting
+# directory levels in each step. Matches bin/ruby/*.
+: "${BOUKENSHA_DIR:="$REPO_ROOT/.boukensha"}"
+export BOUKENSHA_DIR
+
+cd "$REPO_ROOT/week1_baseline/python/10_standard_tool_library"
+
+# This step's MUD tools come from the `mud-manager` daemon over MCP, not from a
+# Python port of MudManager. The demo boots a fake MUD itself, so the only
+# requirement is that Ruby can load the daemon from the repo — no gem install,
+# and no Ruby knowledge needed to run it.
+exec "$venv_python" examples/mcp_mud_demo.py "$@"
