@@ -68,6 +68,10 @@ Day-by-day detail in [05-08-2026](05-08-2026.md). Summary so far:
 - **Auditing against the brief found the machinery complete and the evidence missing.** Scored against the scenario's own words rather than the plan, three of the four report categories had *no data* — not because the tooling could not answer them, but because every run so far had only walked around. **A pipeline with nothing in it looks finished from the inside.**
 - **Two of those gaps needed no new data.** Boredom is a property of the order rooms were entered, which every session already recorded; progression had been sitting in `check score` replies since the first session, captured as text and parsed by nothing. Both were implemented retroactively — the progression parser found **14 readings in sessions recorded before it existed**.
 - **The first combat run produced a finding that is a pair, not a number.** A small chipmunk gives **33 experience**; level 2 needs **1,185** — 35 kills — and the session cost **2 health out of 22**. Neither "too easy" nor "too grindy" describes it alone: the newbie zone is **safe and slow at the same time**, which for a studio whose retention collapsed after an influx of new players is the shape of thing that loses them in the first session. The boredom metric agreed independently: 29 moves through 9 rooms, 3.2× revisits, an 8-move stretch discovering nothing.
+- **The third finding is the week's own argument, applied to the game.** `map` answers *"Sorry, the map is disabled!"* in a world of **12,733 rooms**. Traced to source: `config.c:311` sets `map_option = MAP_IMM_ONLY` and the container carries no `etc/config`, so **the feature is not disabled — it is restricted to immortals, and the message misdescribes that.** Three claims needed separating and only reading the code separated them: not our Docker setup, not a choice Arcane Loop made, but a stock default that hides the feature from every mortal player. **The instrumentation says what happened; it takes reading the code to say whose fault it is.**
+- **Confusion went from one message to four reasons** — `not_present`, `unknown_command`, `cannot_take`, `disabled_command` — and the run that produced them also caught a pattern of mine that had never matched anything: I wrote `Huh?!?` from memory where tbaMUD says `Huh!?!`. **Second time in that file**, after `Obvious exits:` where the game says `[ Exits: n s ]`. Both were written from recollection, both failed silently.
+- **Two more fights confirmed the finding and discharged its caveat.** Three kills: 33, 33, 34 exp; **one hit landed across all three**; health never below 19 of 22; **36 kills to reach level 2**. Safe and slow is now measured rather than extrapolated, and the boredom metric corroborates it from data built for a different purpose entirely.
+- **A stale `--watch` process had been deleting the evidence for an hour.** It held the parser it imported at startup and the ingest drops and recreates, so it did not fail to add progression events — it **removed them from a database built correctly**, ten seconds at a time, while the parser passed its tests and the dashboard refreshed happily. **A convenience that runs unattended must be able to notice it has gone stale.**
 - **The BI layer was cut from scope on day 1 and that was wrong.** Emit → land → reconcile → serve: three stages existed, the fourth did not, so **everything the week had produced was readable only by the person who built it.** Metabase now reads `sessions.db` read-only — seven questions, one dashboard, built by an idempotent stdlib-only provisioner rather than committed as a file, because the OSS edition has no serialization export. That turned out to be the better form anyway: the questions are SQL in a reviewable file rather than state inside a container.
 - **"Can someone pull the repo and run this?" changed the shape of the work**, and was the right question to be asked. A hand-started container is fine for its author and useless to a grader. Rebuilt as `docker compose` plus a provisioner, then **verified by destroying the application database and rebuilding from nothing** — a reproducibility claim untested by destroying something is a guess.
 - **`session_id` was identical across every surface and connected none of them.** The JSONL filename, the log_viz URL and the SQLite column had always agreed; neither tool could address the other. **An identifier two systems share but cannot follow is a coincidence, not a correlation key.** Now the dashboard links into log_viz and log_viz ids paste into its filter, verified narrowing 74/13/6 events down to 61/6/2 for one run.
@@ -98,10 +102,32 @@ Day-by-day detail in [05-08-2026](05-08-2026.md). Summary so far:
 
 ## Key Takeaway
 
-*Provisional.* Week 1 ended on the observation that building an agent without an
-SDK teaches you how to make a system say something true about itself. Week 2
-opened by finding that the system's most confident statement — `"ok": true` on
-every tool call — was the false one, and that the two paths meant to report
-exhaustion had never once run. **The instrumentation that has never fired and the
-flag that cannot say "no" are the same defect: telemetry nobody has yet had a
-reason to disbelieve.**
+Week 1 ended on the observation that building an agent without an SDK teaches
+you how to make a system say something true about itself. Week 2 opened by
+finding that the system's most confident statement — `"ok": true` on every tool
+call — was the false one, and that the two paths meant to report exhaustion had
+never once run. **The instrumentation that has never fired and the flag that
+cannot say "no" are the same defect: telemetry nobody has yet had a reason to
+disbelieve.**
+
+The week then produced that same defect five more times, each in a component
+that reported success while doing the wrong thing — a run that spent a dollar in
+silence, a dashboard refreshing stale numbers behind a spinner that read as
+live, a watcher deleting the rows it existed to maintain, and two regex patterns
+written from memory that matched nothing and said so to no one. **None of them
+failed. All of them lied.**
+
+What separates the ones that were caught from the ones that lasted hours is not
+better instrumentation — every one of them was fully logged. It is that someone
+eventually asked a question whose answer they already expected, and checked.
+The `ok` flag was found by counting failures that should have existed; the
+stale watcher by querying for progression rows that should have been there; the
+map's real cause by reading source instead of trusting the message.
+
+**So the week's actual lesson is narrower than "make systems observable" and
+more useful: a system can only report what it was built to notice, and the
+instrumentation is silent about its own blind spots.** Which is why the last
+finding of the week is the right one to end on. The agent recorded, accurately,
+that the game said *"Sorry, the map is disabled!"* — and the map is not
+disabled. **Telemetry told us what happened; only reading the code told us what
+was true.**

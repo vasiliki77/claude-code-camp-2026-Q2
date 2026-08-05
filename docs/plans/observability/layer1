@@ -304,6 +304,24 @@ SELECT session_id, COUNT(DISTINCT turn) AS turns, ROUND(SUM(cost_usd), 4) AS usd
 FROM events GROUP BY session_id ORDER BY usd DESC;
 ```
 
+**The watcher, and the hazard it introduced.** `--watch` rebuilds whenever the
+session logs change, because Metabase's auto-refresh re-runs its *queries* and
+not this pipeline — a dashboard refreshing over a database nobody rebuilds shows
+stale numbers more often, with a spinner that reads as "live".
+
+But a long-running watcher holds whatever code it imported at startup, and this
+ingest **drops and recreates**. So editing a parser under a running watcher does
+not merely fail to add the new events — it **deletes them from a database
+something else built correctly**. Observed on 05-08: a watcher started at 15:57
+stripped every `journey.progression` row out of the warehouse for an hour, ten
+seconds at a time, while the parser that produced them sat correct on disk and
+its tests passed.
+
+Fixed by having the watcher compare `boukensha/**/*.py` mtimes against its own
+start time and `os.execv` itself before rebuilding. **The check runs before the
+rebuild, not after**, because a rebuild with stale parsers is the destructive
+act.
+
 **Operational rules.**
 
 - `.boukensha/sessions.db` is a **derived artifact** — gitignored, regenerable

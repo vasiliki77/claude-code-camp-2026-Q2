@@ -251,6 +251,25 @@ def fingerprint():
     return len(paths), max((p.stat().st_mtime for p in paths), default=0)
 
 
+def code_changed_since_start(started_at):
+    """True if any boukensha module is newer than this process.
+
+    A long-running watcher holds whatever code it imported at startup. Edit a
+    parser and the watcher keeps rebuilding with the old one — and because it
+    rebuilds by dropping and recreating, it does not merely fail to add the new
+    events, it **deletes them from a database something else built correctly**.
+
+    Observed exactly that: a watcher started at 15:57 silently stripped every
+    progression event out of the warehouse for an hour, ten seconds at a time,
+    while the parser that produced them sat correct on disk.
+
+    The check is cheap and the failure is invisible without it, which is the
+    whole argument for having it.
+    """
+    package = Path(__file__).resolve().parents[1] / "boukensha"
+    return any(p.stat().st_mtime > started_at for p in package.rglob("*.py"))
+
+
 def watch(interval=10):
     """Rebuild whenever the session logs change.
 
@@ -263,9 +282,17 @@ def watch(interval=10):
     and at one directory of small files the cost is unmeasurable.
     """
     print(f"watching {SESSIONS} every {interval}s — Ctrl-C to stop")
+    started_at = time.time()
     last = None
     try:
         while True:
+            # Before rebuilding, not after: a rebuild with stale parsers
+            # destroys rows a current one produced.
+            if code_changed_since_start(started_at):
+                print("\n  boukensha/ changed — restarting so the rebuild uses "
+                      "the current parsers", flush=True)
+                os.execv(sys.executable, [sys.executable, *sys.argv])
+
             current = fingerprint()
             if current != last:
                 build()

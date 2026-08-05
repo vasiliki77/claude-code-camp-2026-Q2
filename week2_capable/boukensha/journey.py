@@ -84,14 +84,28 @@ SCORE_EXP = re.compile(r"You have ([\d,]+) exp, ([\d,]+) gold coins")
 SCORE_NEXT = re.compile(r"You need ([\d,]+) exp to reach your next level")
 SCORE_LEVEL = re.compile(r"This ranks you as (.+?) \(level (\d+)\)")
 
-# A command the game did not understand or could not apply. These are the
-# confusion signal — a real player types something reasonable and gets nothing
-# back that tells them what to do instead.
+# A command the game did not understand or could not apply — the confusion
+# signal. Carries a reason for the same purpose blocking does: "the game has no
+# such command", "that thing isn't here" and "you may not touch that" are three
+# different player experiences and three different fixes.
+#
+# Every pattern here is copied from a reply actually observed. The first draft
+# had `Huh?!?`, written from memory of CircleMUD; tbaMUD says **`Huh!?!`**, and
+# the pattern silently matched nothing for as long as it existed. Second time
+# that has happened in this file — see the exit line in parse_room.
 REJECTED = [
-    re.compile(r"^Huh\?!\?", re.I),
-    re.compile(r"^You do not see that here\.", re.I),
-    re.compile(r"^Nothing here by that name\.", re.I),
-    re.compile(r"^They aren't here\.", re.I),
+    # "Huh!?! Did you mean: tell, take, track" — the game does suggest
+    # alternatives, which makes this the *gentlest* confusion in the set.
+    (re.compile(r"^Huh[!?]{2,}", re.I), "unknown_command"),
+    (re.compile(r"^You do not see that here\.", re.I), "not_present"),
+    (re.compile(r"^Nothing here by that name\.", re.I), "not_present"),
+    (re.compile(r"^They aren't here\.", re.I), "not_present"),
+    # "You can't take a statue." / "The large fountain: you can't take that!"
+    # Scenery a player reasonably tries to interact with and cannot.
+    (re.compile(r"you can'?t take ", re.I), "cannot_take"),
+    # "Sorry, the map is disabled!" — a command that exists, is documented, and
+    # has been switched off. A new player has no way to know that in advance.
+    (re.compile(r"^Sorry, the \w+ is disabled!", re.I), "disabled_command"),
 ]
 
 
@@ -230,13 +244,14 @@ def parse(name, args, result):
             )
             return events
 
-    for pattern in REJECTED:
+    for pattern, reason in REJECTED:
         if pattern.search(body):
             events.append(
                 {
                     "event": "command_rejected",
                     "command": command,
                     "target": args.get("target"),
+                    "reason": reason,
                     "text": body.split("\n")[0].strip(),
                     "vitals": vitals,
                 }

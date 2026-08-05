@@ -241,16 +241,36 @@ The report categories map onto recorded events:
 | **Bored** | rooms revisited, turns per newly discovered room |
 | **Overpowered** | health and progression from the status line on every reply |
 
-A worked example, and the first real finding this produced:
+### The findings so far
 
-> **The Dirt Path** refuses movement in *all four* advertised directions with
-> *"This zone is above your recommended level."* Five of the corpus's six blocks
-> are in that one room. A low-level player who walks in can only leave the way
-> they came.
+**1. A room that only lets you back out.** *The Dirt Path* refuses movement in
+all four advertised directions with *"This zone is above your recommended
+level."* — five of the corpus's blocks in one room.
 
-To audit that yourself: filter the dashboard to the session, open the same
-session in log_viz, and read the turn where it happened. Every claim decomposes
-to a model call and the MUD's exact reply.
+**2. The newbie zone is safe and slow at the same time.** Three kills gave 33,
+33 and 34 experience; **one hit landed across all three fights** and health
+never fell below 19 of 22. Level 2 needs 1,185 experience — **36 kills**. No
+risk, and 36 repetitions to advance. The boredom metric agrees from unrelated
+data: one session made 29 moves through 9 rooms, a 3.2× revisit ratio.
+
+**3. The map command tells players something untrue.** `map` answers *"Sorry,
+the map is disabled!"* in a world of 12,733 rooms. It is **not** disabled — the
+stock default (`config.c:311`, `map_option = MAP_IMM_ONLY`) restricts it to
+immortals, and the message misdescribes that. Nobody configured this; it is
+inherited from the codebase. **If your world has never edited `map_option`,
+your players see the same thing.**
+
+### Auditing a finding
+
+Filter the dashboard to the session, open that session in log_viz, and read the
+turn where it happened. Every claim decomposes to a model call and the MUD's
+exact reply.
+
+**And go one step further before acting on it.** Finding 3 was originally
+recorded as "the map is disabled", which is what the game said and what the
+telemetry faithfully captured. Reading the source changed the finding: the
+feature exists, the message is wrong, and the cause is a default nobody chose.
+**Telemetry tells you what happened; it cannot tell you whose fault it is.**
 
 ---
 

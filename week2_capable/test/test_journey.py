@@ -149,7 +149,35 @@ class TestBlockedAndRejected(unittest.TestCase):
         event = journey.parse("tbamud__look", {"target": "statue"}, NOT_HERE)[0]
 
         self.assertEqual("command_rejected", event["event"])
+        self.assertEqual("not_present", event["reason"])
         self.assertEqual("statue", event["target"])
+
+    def test_the_unknown_command_message_is_huh_bang_question_bang(self):
+        """tbaMUD says `Huh!?!`, not `Huh?!?`. The first draft of this pattern
+        was written from memory and matched nothing for as long as it existed."""
+        text = "Huh!?! Did you mean: tell, take, track\r\n\r\n22H 100M 83V > "
+        event = journey.parse("tbamud__send_raw", {"command": "talk"}, text)[0]
+
+        self.assertEqual("unknown_command", event["reason"])
+
+    def test_untakeable_scenery_is_its_own_reason(self):
+        """Two phrasings for the same experience — a player reaching for
+        something the room described and being refused."""
+        for text in (
+            "You can't take a statue.\r\n\r\n22H 100M 83V > ",
+            "The large fountain: you can't take that!\r\n\r\n22H 100M 83V > ",
+        ):
+            event = journey.parse("tbamud__get_item", {"obj": "statue"}, text)[0]
+            self.assertEqual("cannot_take", event["reason"], text)
+
+    def test_a_disabled_command_is_distinguished_from_an_unknown_one(self):
+        """`map` exists and is documented; this world switched it off. A player
+        cannot tell that apart from a command that never existed — which is why
+        it is worth reporting separately."""
+        text = "Sorry, the map is disabled!\r\n\r\n22H 100M 83V > "
+        event = journey.parse("tbamud__send_raw", {"command": "map"}, text)[0]
+
+        self.assertEqual("disabled_command", event["reason"])
 
     def test_a_non_move_refusal_is_never_reported_as_movement(self):
         events = journey.parse("tbamud__look", {"target": "x"}, LEVEL_GATE)

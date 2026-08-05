@@ -427,9 +427,48 @@ session — which is precisely the question the brief was asked to answer.
 The boredom numbers agree independently: one session walked **29 moves through
 9 rooms, a 3.2× revisit ratio with an 8-move stretch that discovered nothing**.
 
-**Caveat kept with the finding**: the 33 exp is one kill. The 35-kills-per-level
-figure extrapolates from a single data point and needs two or three more to be
-worth reporting to anyone.
+**Third finding, and the one that best demonstrates why attribution matters.**
+An interaction run tried `map` and got *"Sorry, the map is disabled!"* — in a
+world of **12,733 rooms**.
+
+Traced to source rather than reported as observed:
+
+- `config.c:311` — `int map_option = MAP_IMM_ONLY;`
+- `asciimap.c:218` — `(CONFIG_MAP == MAP_IMM_ONLY) && (GET_LEVEL(ch) < LVL_IMMORT)`
+- the container has no `etc/config`, so the MUD runs entirely on compiled defaults
+
+**The feature is not disabled; it is restricted to immortals, and the message
+misdescribes that.** A player is told something does not exist when it does,
+with no hint that a permission level is involved or that an administrator could
+switch it on. That is the *confused* category exactly: a reasonable command,
+refused, with nothing to tell the player what to do instead.
+
+Three claims have to be kept apart here, and only tracing the code separates
+them:
+
+| Claim | True? |
+| --- | --- |
+| "Our Docker setup disabled it" | **No** — the container adds no config |
+| "Arcane Loop disabled it" | **No** — nobody chose it |
+| "The stock default hides it from every mortal, and says the wrong thing" | **Yes** |
+
+Reportable, and reportable *as a default*. If Arcane Loop never edited
+`map_option`, their players have the same experience — which is the kind of
+inherited default a retention investigation exists to find.
+
+**Confirmed by two further fights.** Three kills now, and the numbers hold:
+
+| Kill | Exp | Hits taken | Health after |
+| --- | --- | --- | --- |
+| small chipmunk | 33 | 0 | 22/22 |
+| beastly fido | 33 | 0 | 22/22 |
+| beastly fido | 34 | 1 | 19/22 |
+
+**One hit landed across three fights; health never fell below 86%; level 2 needs
+36 kills at this rate.** The caveat that stood against the first measurement —
+one data point — is discharged. Safe *and* slow is now measured rather than
+extrapolated, and two independently built signals (combat risk, and the boredom
+metric's 3.2× revisit ratio) describe the same experience from different data.
 
 **Python only, decided 05-08.** The app is Python from here, so
 `week2_capable/` is the single tree that changes and the
