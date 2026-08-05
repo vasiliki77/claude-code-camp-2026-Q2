@@ -21,4 +21,8 @@ week0_explore/preview/data/world/**/*.json
 # tracked as the source of truth). Glob covers the -wal/-shm sidecars.
 .boukensha/sessions.db*
 
+# Metabase keeps its accounts, questions and dashboards in a docker volume
+# rather than the repo — nothing to ignore here, but worth saying so it does not
+# look forgotten. week2_capable/observability/provision.py rebuilds them.
+
 *.gem

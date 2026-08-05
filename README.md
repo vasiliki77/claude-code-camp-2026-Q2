@@ -1,6 +1,27 @@
 # Claude Code Camp
 This is the official repo for the Claude Code Camp operated by [ExamPro](https://www.exampro.co)
 
+## Player Journey Agent
+
+An agent that plays a MUD the way a new player would, maps the world, and
+reports where players get **confused, blocked, bored or overpowered**. Built for
+the Arcane Loop scenario, proven against CircleMUD.
+
+**→ [Operator's Guide](docs/user_guide.md)** — setup, running it, reading the
+results, what it costs, and what it does not yet do.
+
+Quick look, free and offline:
+
+```sh
+cd week2_capable
+export BOUKENSHA_DIR="$(cd .. && pwd)/.boukensha"
+../.venv/bin/python examples/demo.py --offline
+```
+
+The agent is in [`week2_capable/`](week2_capable/README.md), the design in
+[`docs/plans/observability/`](docs/plans/observability/), and the current map in
+[`docs/maps/world.md`](docs/maps/world.md).
+
 ## Technical Journal
 
 Bootcamp learning log under [`docs/technical_journal/`](docs/technical_journal/), one weekly summary (Technical Goal / Uncertainty / Hypotheses / Observations / Conclusions / Key Takeaway) backed by a detailed log per day.

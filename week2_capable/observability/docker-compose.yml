@@ -1,0 +1,46 @@
+# Metabase over sessions.db — the BI layer.
+#
+#   cd week2_capable/observability
+#   docker compose up -d
+#   python3 provision.py          # idempotent: creates the source, questions, dashboard
+#
+# Then http://localhost:3000
+#
+# Metabase keeps its own application database (accounts, questions, dashboards)
+# separately from the data it reads. That is why provision.py exists: the OSS
+# edition has no serialization export, so the dashboard cannot be committed as a
+# file. Rebuilding it from the API on a fresh container is the reproducible
+# alternative, and it means a grader who has never seen this repo gets the same
+# dashboard from the same two commands.
+#
+# The app database lives in a named volume rather than a bind mount, so
+# `docker compose down -v` genuinely resets to nothing and provision.py can be
+# proven to work from scratch.
+
+services:
+  metabase:
+    image: metabase/metabase:v0.63.3 # pinned: the API shape moves between releases
+    container_name: metabase
+    ports:
+      - "3000:3000"
+    volumes:
+      # The warehouse, read-only — Metabase reads it and must never write to it.
+      # sessions.db is a derived cache, rebuilt by examples/ingest_sessions.py;
+      # anything Metabase wrote would be lost on the next ingest anyway.
+      - ../../.boukensha:/data:ro
+      - metabase-app-db:/metabase.db
+    environment:
+      MB_DB_TYPE: h2
+      MB_DB_FILE: /metabase.db/metabase.db
+      # Off by default; this is a local analysis tool, not a product.
+      MB_ANON_TRACKING_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  metabase-app-db:

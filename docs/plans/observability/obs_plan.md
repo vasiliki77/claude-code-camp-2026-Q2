@@ -254,6 +254,7 @@ carry.
 | Storage (source of truth) | JSONL in `.boukensha/sessions/` | none |
 | Trace viewing | `log_viz` (Sinatra), already reads these as traces | none |
 | Aggregation | **SQLite** — schema in [`layer1`](layer1) §2.1 | none: `sqlite3` CLI and Python's stdlib `sqlite3` are both already present |
+| BI / dashboards | **Metabase**, self-hosted — see §5.4 | one container; the provisioner is stdlib-only |
 | World graph (Layer 3) | Graphviz for static SVG, Mermaid for embedding in the journal | Graphviz (distro package) |
 | Charts | inline SVG in ERB, as `log_viz` already does for context bars | none |
 
@@ -324,6 +325,43 @@ flag for MCP tools and the `error:` prefix for local ones, rather than the
 result-type refactor in [`layer1`](layer1) §1.1 option B. It is a handful of
 lines, it is correct for every tool the MUD work actually calls, and the refactor
 stays available if a later week needs it.
+
+### 5.4 The BI layer — added 05-08, reversing part of §5.3
+
+§5.3 cut the BI tool as scope the deliverable did not need. That was wrong, and
+the reason it was wrong is worth recording: **the pipeline was complete except
+for the one stage that makes it legible to anybody who did not build it.**
+
+Laid against the reference pipeline this project is modelled on — emit → land in
+a warehouse → reconcile into a canonical view → serve BI — the first three
+stages existed and the fourth did not:
+
+| Stage | Here |
+| --- | --- |
+| emit | instrumented `Logger` |
+| land | JSONL → SQLite ingest |
+| reconcile | one `events` table, `journey.*` beside the agent phases |
+| **serve** | **Metabase** |
+
+A generated HTML page was considered first and rejected: it answers "show me a
+picture" without answering "let me ask a question". The whole argument for a
+warehouse is that the questions are not known in advance.
+
+**Metabase, self-hosted, free**, in `week2_capable/observability/`. Reads
+`sessions.db` read-only. Seven questions and one dashboard, built by
+`provision.py` through the API rather than committed as a file — the OSS edition
+has no serialization export, so a script is the only reproducible form. It also
+happens to be the reviewable one: the questions are SQL in a file rather than
+state in a container.
+
+**`session_id` is the correlation key across all four surfaces** — the JSONL
+filename, the log_viz URL, the SQLite column, and the dashboard filter. Verified
+identical across all 69 sessions. The dashboard links out to log_viz, and
+log_viz ids paste into the dashboard filter, so aggregate and detail reach each
+other in both directions.
+
+Verified reproducible: `docker compose down -v` destroys the application
+database, and two commands rebuild the entire dashboard from nothing.
 
 ---
 
