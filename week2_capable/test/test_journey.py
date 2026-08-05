@@ -88,6 +88,40 @@ class TestRoomEntered(unittest.TestCase):
         self.assertIsNone(self.event(PITCH_BLACK)["room"])
 
 
+class TestDoorExits(unittest.TestCase):
+    """CircleMUD parenthesises a closed-door exit: `[ Exits: n (e) s ]`.
+
+    Carrying the parentheses through broke two things at once — the coverage
+    check compared `(e)` against `e` and reported every door as never taken,
+    and room identity keys on the exit set, so a door shut on one visit and
+    open on the next split one room into two nodes.
+    """
+
+    WITH_DOOR = (
+        "A Nexus\r\n   A crossing of ways.\r\n[ Exits: n (e) s ]\r\n\r\n"
+        "22H 100M 80V (news) (motd) > "
+    )
+
+    def test_exits_are_normalized(self):
+        event = journey.parse("tbamud__move", {"direction": "north"}, self.WITH_DOOR)[0]
+
+        self.assertEqual(["n", "e", "s"], event["exits"])
+
+    def test_doors_are_reported_separately(self):
+        event = journey.parse("tbamud__move", {"direction": "north"}, self.WITH_DOOR)[0]
+
+        self.assertEqual(["e"], event["doors"])
+
+    def test_door_state_does_not_change_the_exit_set(self):
+        """The identity key must not move when a door opens."""
+        opened = self.WITH_DOOR.replace("(e)", "e")
+        a = journey.parse("tbamud__move", {}, self.WITH_DOOR)[0]
+        b = journey.parse("tbamud__move", {}, opened)[0]
+
+        self.assertEqual(a["exits"], b["exits"])
+        self.assertNotEqual(a["doors"], b["doors"])
+
+
 class TestBlockedAndRejected(unittest.TestCase):
     def test_a_closed_door_blocks_the_move(self):
         event = journey.parse("tbamud__move", {"direction": "east"}, DOOR_CLOSED)[0]

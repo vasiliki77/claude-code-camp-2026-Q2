@@ -318,6 +318,7 @@ def run(
     shell_timeout=30,
     mcp=None,
     on_event=None,
+    max_iterations=None,
 ):
     """One-shot run: send a single task, get a response, return.
 
@@ -338,6 +339,10 @@ def run(
     on_event:         called with every log event as it is written, for
                       progress output. Without it a run prints nothing until it
                       finishes. Same hook the TUI subscribes to.
+    max_iterations:   overrides tasks.<name>.max_iterations for this run only.
+                      The ceiling is what bounds cost, and a caller that wants
+                      a short run should not have to edit settings.yaml and
+                      remember to put it back.
 
     There is deliberately no `mud:` option. Ruby registers 480 lines of MUD
     tools in-process; Python gets the same 26 over MCP from `mud-manager`.
@@ -379,7 +384,11 @@ def run(
             client=session.client,
             logger=session.logger,
             task_settings=session.task_settings,
-            max_iterations=session.max_iterations,
+            # `is None`, not `or`: 0 is a meaningful value here — it disables
+            # the ceiling — and would be swallowed by truthiness.
+            max_iterations=(
+                session.max_iterations if max_iterations is None else max_iterations
+            ),
             max_turn_tokens=session.max_turn_tokens,
             max_output_tokens=session.max_output_tokens,
         )

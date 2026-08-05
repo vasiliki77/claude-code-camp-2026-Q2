@@ -122,6 +122,24 @@ put in front of a non-engineer. Progression paths are traversals of it.
 
 Depends on Layer 2 having a stable room identity — see §4.2.
 
+**BUILT 05-08** — `boukensha/world.py` (pure graph building) and
+`examples/world_map.py` (renders from `sessions.db`). **37 rooms, 62 passages,
+6 blocks** across 7 sessions, written to `docs/maps/world.md`.
+
+Mermaid is the primary output, DOT the alternate. Graphviz is not installed
+here, but that is not the reason: Mermaid renders natively on GitHub, so the map
+drops into a README with no toolchain and no image file to keep in sync.
+
+Two things the graph does that a room list cannot:
+
+- **It attaches each block to the room the player was standing in.** The journey
+  event knows the direction and the refusal, never the origin — that only exists
+  once movements are folded into a path. This is what produced the week's first
+  real finding (§7).
+- **It measures its own coverage.** `unexplored()` reports advertised exits never
+  taken — 24 rooms' worth — which is the guard against reporting a region as
+  unreachable when it was merely unvisited.
+
 ### Layer 4 — Memory and compaction
 
 Also in scope this week. `Context#compact_messages!` drops the oldest 40% of
@@ -182,9 +200,28 @@ events from archived sessions. Worth an explicit decision before Layer 2 starts.
 The agent sees room *descriptions*, not vnums. Two rooms with identical
 descriptions (a corridor tile repeated) are one node or two depending on how
 identity is defined, and the whole graph's shape follows from the answer.
-Options: description hash; description hash + exit set; path-from-origin. Needs
-settling before Layer 3 — it is the highest-leverage modelling choice in the
-project.
+
+**SETTLED 05-08 — `(title, sorted exits)`, decided by counting rather than
+arguing.** The corpus holds 72 room entries with **32 distinct titles but 36
+distinct (title, exits) pairs**. Three titles cover more than one room:
+
+    The Great Field Of Midgaard      exits ns   and ensw
+    Wall Road                        exits ens  and ns
+    A Shaded Path Through The Forest exits esw, sw and ns
+
+Keying on title alone merges four rooms into three and makes every edge through
+them a lie. CircleMUD reuses titles across the segments of a road or field —
+normal MUD authoring, not a quirk of this world.
+
+**Residual, stated rather than hidden:** two genuinely distinct rooms sharing
+both title *and* exit set still merge. Separating those needs the path taken to
+reach them. No collision exists in this corpus; a larger map will have them.
+
+**Dark rooms have no content to key on at all** — `It is pitch black...` gives
+neither title nor exits — so they are keyed by their entrance: the room entered
+*from*, plus the direction. Unique per entrance, therefore right for the edge
+even when wrong for the node. Two entrances to one dark room show up as two
+nodes, which is a visible guess rather than a silent merge.
 
 ### 4.3 Does the journey stream share the session file?
 
@@ -192,6 +229,14 @@ Same JSONL with a `phase` namespace (`journey.room_entered`), or a sibling
 `journeys/` file keyed by `session_id`? Sharing keeps correlation trivial and
 `log_viz` gets it for free; separating keeps QnA's artifact clean and lets the
 two streams be retained on different schedules.
+
+**SETTLED 05-08 — one table, `journey.*` phases beside the agent phases**, and
+the question turned out smaller than it looked. Because journey events are
+derived at ingest (§4.1) rather than emitted live, they were never going to be
+written to a session file at all: the JSONL keeps only what the agent actually
+observed, and the derived layer lives in `sessions.db`. Correlation is
+positional — a journey row inherits the `turn` and `iteration` of the
+`tool_result` it came from, which the ingest forward-fills.
 
 ---
 
@@ -293,22 +338,35 @@ stays available if a later week needs it.
 
 ## 7. Order of work and verification gates
 
-Scoped to the minimum effective path of §5.3.
+Scoped to the minimum effective path of §5.3. **Steps 1–7 complete as of 05-08**
+— what each one actually produced is noted inline.
 
-1. **`session_end` + truthful `ok`.** *Gate:* a deliberately failing tool and a
-   `Ctrl-C` both show up correctly in the JSONL.
-2. **`prompt` payload trim.** *Gate:* a long session's file is dominated by real
-   events rather than re-serialized history, and `log_viz` renders it unchanged.
-3. **Decisions §4.1–4.3 recorded** in this document before Layer 2 starts.
-4. **Layer 2 — three journey event types.** *Gate:* every journey event resolves
-   back to a `session_id` + `turn` + `iteration` present in the agent stream.
-5. **SQLite ingest + canned queries.** *Gate:* runs over all 62 existing files
-   without special-casing; absent fields read as absent, not zero.
-6. **Layer 3 graph.** *Gate:* a mapping run over a known CircleMUD zone
-   reproduces that zone's real topology.
-7. **Layer 4 — force compaction and observe it.** *Gate:* the `compaction` event
-   appears for the first time in a real session, and the queries can say whether
-   the agent re-walked ground it had already mapped.
+1. **`session_end` + truthful `ok`.** ✓ *Gate met* — a game refusal logs
+   `ok=True` and a daemon error `ok=False`, verified against the live MUD;
+   `Ctrl-C` writes `session_end` with `reason: "interrupted"`.
+2. **`prompt` payload trim.** ✓ *Gate met* — the 80-iteration mapping run's file
+   is 31% `prompt` events, down from 85%.
+3. **Decisions §4.1–4.3 recorded.** ✓ All three closed; see §4.
+4. **Layer 2 — three journey event types.** ✓ *Gate met* — all 90 journey rows
+   carry `turn` and `iteration`.
+5. **SQLite ingest + canned queries.** ✓ *Gate met* — 1,164 rows from 66
+   sessions, including the 62 recorded before Layer 2 existed; absent fields
+   read as NULL.
+6. **Layer 3 graph.** ✓ *Built* — 37 rooms, 62 passages, 6 blocks.
+   **Gate only partly met:** the graph has not been checked against CircleMUD's
+   own zone files, so its topology is *self-consistent* rather than *verified*.
+   `week0_explore/circlemud-world-parser` already converts the world data to
+   JSON, so the comparison is available whenever it is wanted.
+7. **Layer 4 — force compaction and observe it.** ✓ *Gate met* — fired twice for
+   4.1 cents, no 400. Whether the agent re-walked mapped ground is answerable
+   from `unexplored()` and the visit counts but has not been asked yet.
+
+**First finding produced, 05-08.** `The Dirt Path` refuses movement in **all
+four advertised directions** with *"This zone is above your recommended
+level."* — a room a low-level player can enter and then only leave the way they
+came. Five of the corpus's six blocks are in that one room. It is exactly the
+shape of finding the brief asks for, it is traceable to a `session_id` + `turn`
++ `iteration`, and nothing about it was predicted.
 
 **Python only, decided 05-08.** The app is Python from here, so
 `week2_capable/` is the single tree that changes and the

@@ -22,6 +22,7 @@ for how the pieces fit together.
 | `boukensha/logger.py` | `session_end` with reason and totals; `prompt` no longer re-serializes the whole history every iteration |
 | `boukensha/run.py` | `on_event=` so a run is not silent for its whole duration |
 | `boukensha/journey.py` | **Layer 2** — MUD replies parsed into player-journey events |
+| `boukensha/world.py` | **Layer 3** — journey events folded into a room graph |
 
 ## Running it
 
@@ -35,12 +36,19 @@ PY=../.venv/bin/python
 
 | Command | What it does | Cost |
 | --- | --- | --- |
-| `$PY -m unittest discover -s test` | 127 tests | free |
+| `$PY examples/demo.py --offline` | **the whole pipeline over existing data** | free |
+| `$PY examples/demo.py` | the same, with a live 12-move run first | ~15c |
+| `$PY -m unittest discover -s test` | 130 tests | free |
 | `$PY examples/ingest_sessions.py` | rebuild `sessions.db`, print the report | free |
 | `$PY examples/ingest_sessions.py --report` | report only, no rebuild | free |
+| `$PY examples/world_map.py` | rebuild `docs/maps/world.md` | free |
 | `$PY examples/compaction_gate.py` | force compaction deliberately | ~4c |
-| `$PY examples/mapping_run.py` | explore and map the live MUD | **~$1** |
+| `$PY examples/mapping_run.py` | a long exploration, 80 moves | **~$1** |
 | `$PY examples/example.py` | local-tools REPL, no MUD | billable |
+
+`demo.py` is the one to run first — five acts (play, capture, analyse, finding,
+map) in the order the architecture runs. `--offline` skips the live MUD entirely
+so pacing and terminal size are free to get wrong before a recorded take.
 
 `mapping_run.py` needs CircleMUD up — `docker compose up -d` in
 [`week0_explore/infrastructure`](../week0_explore/infrastructure/README.md), then

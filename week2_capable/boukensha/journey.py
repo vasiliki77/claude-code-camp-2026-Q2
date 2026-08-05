@@ -107,22 +107,35 @@ def split_prompt(text):
 
 
 def parse_room(body):
-    """(name, exits) for a room description, or (None, None).
+    """(name, exits, doors) for a room description, or (None, None, None).
 
     A room is a reply carrying an exit line; its name is the first line. Rooms
     with no exits at all do not occur in the corpus, and would be unmappable
     anyway — a node with no edges is not a place a journey passes through.
+
+    **Exits are normalized and doors reported separately.** CircleMUD wraps a
+    closed-door exit in parentheses — `[ Exits: n (e) s ]` — and the corpus has
+    9 of them. Carrying the parentheses through was wrong twice over: the
+    coverage check compared `(e)` against `e` and so reported every door as an
+    exit never taken, and room identity keys on the exit set, so a door that is
+    shut on one visit and open on the next would split one room into two nodes.
+    No collision in this corpus, but only by luck.
+
+    The door itself is worth keeping — a closed door is where a player is about
+    to be blocked — so it comes back as its own list rather than being discarded.
     """
     match = EXITS.search(body)
     if not match:
-        return None, None
+        return None, None, None
 
     lines = [line for line in body.split("\n") if line.strip()]
     if not lines:
-        return None, None
+        return None, None, None
 
-    exits = [d for d in match.group("exits").split() if d]
-    return lines[0].strip(), exits
+    raw = [d for d in match.group("exits").split() if d]
+    exits = [d.strip("()") for d in raw]
+    doors = [d.strip("()") for d in raw if d.startswith("(")]
+    return lines[0].strip(), exits, doors
 
 
 def parse(name, args, result):
@@ -191,7 +204,7 @@ def parse(name, args, result):
         )
         return events
 
-    room, exits = parse_room(body)
+    room, exits, doors = parse_room(body)
     if room:
         events.append(
             {
@@ -199,6 +212,9 @@ def parse(name, args, result):
                 "command": command,
                 "room": room,
                 "exits": exits,
+                # Closed doors, as a subset of exits. Where a player is about to
+                # be blocked, visible before they try it.
+                "doors": doors,
                 # How the player got here. The graph needs the edge, not just
                 # the node, and only the call knows which way we came.
                 "direction": args.get("direction"),
