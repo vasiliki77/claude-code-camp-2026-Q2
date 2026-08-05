@@ -2,9 +2,12 @@
 
 Umbrella plan for observability week. Splits the work into four layers, fixes
 their dependency order, and records the decisions that have to be settled before
-Layer 2 can be designed. Layer 1 has its own plan in [`layer1`](layer1);
-Layers 2–4 get theirs once Layer 1's event substrate is trustworthy.
-[`architecture.md`](architecture.md) draws how the pieces fit together and why.
+Layer 2 can be designed. [`architecture.md`](architecture.md) draws how the
+pieces fit together and why.
+
+Each layer has its own plan: [`layer1`](layer1) (agent telemetry),
+[`layer2`](layer2) (journey telemetry), [`layer3`](layer3) (the world graph),
+and [`layer4`](layer4) (memory and compaction).
 
 ---
 
@@ -117,6 +120,8 @@ numbers had been sitting in `check score` replies since the first session,
 unparsed. Both were implemented retroactively over the archive — the progression
 parser found 14 readings in sessions recorded before it existed.
 
+Detailed plan: [`layer2`](layer2).
+
 **Layer 2 cannot be designed until §4's decisions are settled**, because where
 the events are emitted determines what they can contain.
 
@@ -126,6 +131,8 @@ Rooms as nodes, exits as edges, each annotated with the Layer 2 events that
 occurred there. This is simultaneously the "map the world" deliverable, the
 substrate the blocked/bored analysis runs over, and the most legible artifact to
 put in front of a non-engineer. Progression paths are traversals of it.
+
+Detailed plan: [`layer3`](layer3).
 
 Depends on Layer 2 having a stable room identity — see §4.2.
 
@@ -148,6 +155,8 @@ Two things the graph does that a room list cannot:
   unreachable when it was merely unvisited.
 
 ### Layer 4 — Memory and compaction
+
+Detailed plan: [`layer4`](layer4).
 
 Also in scope this week. `Context#compact_messages!` drops the oldest 40% of
 messages and snaps to a user boundary — **pure deletion: no summarization,

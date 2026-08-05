@@ -1,6 +1,8 @@
 # Week 2
 
-*In progress — day 1 of the week. Conclusions are provisional and marked as such.*
+*All four layers built and the agent handed over, from one day's work
+(05-08-2026). The remaining gaps are gaps in **evidence**, not in machinery, and
+are named in the Conclusions rather than left to be discovered.*
 
 ## Technical Goal
 
@@ -84,7 +86,7 @@ Day-by-day detail in [05-08-2026](05-08-2026.md). Summary so far:
 
 ## Technical Conclusions
 
-*Pending — the week has one day of work in it. Settled so far:*
+All four layers shipped and three findings produced. What the week settled:
 
 - **"The existing JSONL is closer to sufficient than it looks." — Holding.** Nothing found on day 1 argues for replacing it, and two things argue against: `log_viz` already reads it as traces, and the 62 archived sessions stay queryable by tools not yet written. Retention is `git`.
 - **"Cost will not be the deciding factor." — Confirmed, and more strongly than expected.** Every candidate is free to self-host, so the constraint eliminated nothing and the decision had to be made on other grounds entirely.
