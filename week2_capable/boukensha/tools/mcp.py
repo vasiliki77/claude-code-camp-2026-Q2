@@ -1,4 +1,5 @@
 from ..mcp.client import Client
+from ..tool import ToolFailure
 
 
 class ToolCollisionError(Exception):
@@ -64,6 +65,14 @@ def _register_one(registry, client, tool, prefix, label):
         # A failed tool call comes back as text, not an exception. The agent
         # loop feeds it straight to the model, which can then correct itself —
         # raising here would abort the run instead.
+        #
+        # The text is identical either way; only the type differs, so the model
+        # sees no change and the logger can stop recording every MCP failure as
+        # a success. Client.call_tool already surfaces `isError` structurally —
+        # this is the one place that used to throw it away.
+        if result["error"]:
+            return ToolFailure(result["text"])
+
         return result["text"]
 
     return call

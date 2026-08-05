@@ -4,8 +4,9 @@ Child of [`obs_plan.md`](obs_plan.md) §3; drawn in
 [`architecture.md`](architecture.md). Scope: make the existing session
 stream honest and complete, so it can serve as the **control** the journey
 stream (Layer 2) is read against. No new architecture — the JSONL-per-session
-shape stays, `log_viz` stays the reader, and every change lands in both
-`week1_baseline/ruby/12_context/` and `week1_baseline/python/12_context/`.
+shape stays, `log_viz` stays the reader, and every change lands in
+`week2_capable/` — branched from `week1_baseline/python/12_context` on 05-08,
+which stays frozen as week 1's artifact.
 
 The premise of the layer: *a finding about the game is only credible if the same
 run can prove the agent itself was healthy.* Every item below is either a place
@@ -162,13 +163,46 @@ Expected effect on the measured file: ~191 KB → a few KB.
 `compact_if_needed` — and both are on the path a long mapping session takes for
 the first time. `log_viz` already switches on `compaction` (`session.rb:86`).
 
-This is not a fix, it is a **gate**: before Layer 2 runs long sessions, force
-both paths deliberately — set `tasks.player.max_iterations` low and
-`compaction_threshold` to something like `0.1` in `.boukensha/settings.yaml`
-(both keys are already documented in that file) — and confirm the events appear
-and render. The 12-context journal already flagged that compaction can orphan a
-`tool_result` into a 400; that failure would otherwise surface for the first time
-mid-run with a half-mapped world.
+**CLOSED 05-08.** Both fired, via `examples/compaction_gate.py` — three short
+turns on one context with the threshold overridden on the context object rather
+than in `settings.yaml`, so an interrupted run leaves no dangerous config
+behind. `limit_reached` ×2, `compaction` ×2 (dropping 7 messages then 6), 4.1
+cents, and **no 400** — the failure the 12-context journal warned about did not
+occur, because compaction runs at a turn boundary where the message list already
+ends cleanly.
+
+Closing the gate surfaced two defects, both real and both **out of scope this
+week** (§5.3's minimum path), recorded here because the first will bite as soon
+as a mapping run gets long:
+
+### 1.6.1 Compaction cannot fire mid-turn
+
+`Agent.run` calls `_compact_if_needed()` at `agent.py:63`, **outside and before**
+the `while True` loop. Compaction is therefore evaluated **once per turn, at
+turn start**, when a one-shot run's context is still empty.
+
+**A mapping run is one long turn.** Its context only grows — the 05-08 run went
+from 4,117 to 20,568 tokens across 80 iterations with no opportunity to compact
+at any point. A long enough run reaches the context window and fails instead of
+compacting, and that is the project's core use case rather than an edge of it.
+
+It also explains why the 400 above did not appear: a mid-turn compaction is
+exactly the one that could orphan a `tool_result`, and mid-turn compaction
+currently cannot happen. **The two findings are the same fact seen from
+opposite sides** — fixing the first makes the second reachable, so they have to
+be fixed together.
+
+### 1.6.2 `wrap_up` deflates the context reading
+
+A turn ending on `max_iterations` calls the model once more with **tools
+disabled** (`wrap_up`). That call's `input_tokens` excludes all 26 tool
+definitions, and `record_usage` writes it straight into `current_tokens`. Turn 1
+of the gate reported **917 tokens** with ~4.5k actually in play; turn 3 reported
+948 after genuinely spending 13,946.
+
+Compounded with §1.6.1 the effect is perverse: **compaction is least likely to
+fire right after the turns that worked hardest**, because those are the turns
+that end on a ceiling and therefore end with a deflated reading.
 
 ---
 
@@ -316,8 +350,9 @@ session file stays readable — required, since §2 has to run over them.
 
 ## 5. Python only
 
-**Decided 05-08.** The app is Python from here, so `week1_baseline/python/12_context/`
-is the only tree that changes. The Ruby analysis throughout this document stays
+**Decided 05-08.** The app is Python from here, so `week2_capable/` — branched
+that day from `week1_baseline/python/12_context`, which stays frozen as week 1's
+artifact — is the only tree that changes. The Ruby analysis throughout this document stays
 because that is where the defects were first found and the file references are
 still the clearest statement of each one — but `week1_baseline/ruby/12_context/`
 is not being edited.
@@ -339,7 +374,7 @@ available.
 ## 6. Tests
 
 Existing test dirs (`week1_baseline/ruby/12_context/test/`,
-`week1_baseline/python/12_context/test/`) are the pattern to follow.
+`week2_capable/test/`) are the pattern to follow.
 
 | Test | Asserts |
 | --- | --- |

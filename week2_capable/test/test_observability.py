@@ -85,6 +85,38 @@ class TestSessionEnd(unittest.TestCase):
         self.assertEqual(1, last["turns"])
         self.assertIn("duration_s", last)
 
+    def test_a_one_shot_run_counts_as_one_turn(self):
+        """Only Repl calls turn(); run() does not. Counting those calls alone
+        reported turns=0 for every non-REPL session — the 05-08 mapping run was
+        80 iterations of one turn and said zero."""
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = self.logger_in(tmp)
+            logger.turn_end(reason="max_iterations", iterations=80, tokens=1040800)
+            logger.close()
+
+            self.assertEqual(1, read_events(logger.path)[-1]["turns"])
+
+    def test_a_repl_session_counts_its_numbered_turns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = self.logger_in(tmp)
+            for n in (1, 2, 3):
+                logger.turn(n=n)
+                logger.turn_end(reason="completed", iterations=2)
+            logger.close()
+
+            self.assertEqual(3, read_events(logger.path)[-1]["turns"])
+
+    def test_a_turn_interrupted_mid_flight_still_counts(self):
+        """Counting endings alone would drop the turn that never finished."""
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = self.logger_in(tmp)
+            logger.turn(n=1)
+            logger.turn_end(reason="completed", iterations=2)
+            logger.turn(n=2)  # started, never ended
+            logger.close(reason="interrupted")
+
+            self.assertEqual(2, read_events(logger.path)[-1]["turns"])
+
     def test_default_reason_is_completed(self):
         with tempfile.TemporaryDirectory() as tmp:
             logger = self.logger_in(tmp)

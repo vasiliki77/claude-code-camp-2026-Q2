@@ -109,9 +109,11 @@ class TestAgentLimits(unittest.TestCase):
         _ctx, events, _before = self.run_agent(max_iterations=3)
         limit = next(e for e in events if e["phase"] == "limit_reached")
 
+        turn_end = next(e for e in events if e["phase"] == "turn_end")
+
         self.assertEqual("max_iterations", limit["kind"])
         self.assertEqual(3, limit["max"])
-        self.assertEqual("max_iterations", events[-1]["reason"])
+        self.assertEqual("max_iterations", turn_end["reason"])
 
     def test_token_ceiling_stops_a_turn_the_iteration_ceiling_would_not(self):
         """A turn can be cheap in tool calls and expensive in tokens, which is
@@ -124,9 +126,11 @@ class TestAgentLimits(unittest.TestCase):
         )
         limit = next(e for e in events if e["phase"] == "limit_reached")
 
+        turn_end = next(e for e in events if e["phase"] == "turn_end")
+
         self.assertEqual("max_tokens", limit["kind"])
         self.assertGreaterEqual(ctx.turn_tokens, 1200)
-        self.assertEqual("max_tokens", events[-1]["reason"])
+        self.assertEqual("max_tokens", turn_end["reason"])
 
     def test_zero_disables_a_ceiling(self):
         _ctx, events, _before = self.run_agent(max_iterations=2, max_turn_tokens=0)

@@ -1,6 +1,7 @@
 from . import usage as usage_mod
 from .errors import ApiError, TurnCancelled
 from .logger import Logger
+from .tool import classify_result
 
 
 class Agent:
@@ -287,7 +288,12 @@ class Agent:
             # model as the tool result so it can recover on the next iteration.
             try:
                 result = self.registry.dispatch(name, args)
-                self.logger.tool_result(name=name, result=result, ok=True)
+                # Not `ok=True`: a tool that returns a failure rather than
+                # raising is still a failure, and most of them return.
+                ok, error = classify_result(result)
+                self.logger.tool_result(
+                    name=name, result=result, ok=ok, error=error
+                )
             except Exception as e:
                 result = f"ERROR: {type(e).__name__}: {e}"
                 self.logger.tool_result(

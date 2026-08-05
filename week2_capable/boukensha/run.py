@@ -1,4 +1,5 @@
 import os
+import sys
 from types import SimpleNamespace
 
 from . import backends, models, runtime, tools as tools_lib
@@ -131,6 +132,27 @@ def _register_all_mcp(registry, mcp, cfg):
             )
 
     return clients
+
+
+def _exit_reason(explicit=None):
+    """How the session ended, for Logger.close.
+
+    Called from a finally block, where sys.exc_info() still reports whatever
+    exception is currently propagating — that is how an unhandled crash gets
+    told apart from a clean return without restructuring the control flow.
+    A caller that already handled its exception passes `explicit` instead,
+    because by then exc_info() has been cleared.
+    """
+    if explicit:
+        return explicit
+
+    exc = sys.exc_info()[0]
+    if exc is None:
+        return "completed"
+    if issubclass(exc, KeyboardInterrupt):
+        return "interrupted"
+
+    return "error"
 
 
 def _close_mcp_clients(clients):
@@ -295,6 +317,7 @@ def run(
     allowed_commands=None,
     shell_timeout=30,
     mcp=None,
+    on_event=None,
 ):
     """One-shot run: send a single task, get a response, return.
 
@@ -312,6 +335,9 @@ def run(
                       settings from config; a dict overrides parts of that;
                       None or False registers nothing. Any mcp_servers entry in
                       settings.yaml other than "mud" is registered regardless.
+    on_event:         called with every log event as it is written, for
+                      progress output. Without it a run prints nothing until it
+                      finishes. Same hook the TUI subscribes to.
 
     There is deliberately no `mud:` option. Ruby registers 480 lines of MUD
     tools in-process; Python gets the same 26 over MCP from `mud-manager`.
@@ -339,6 +365,13 @@ def run(
             shell_timeout=shell_timeout,
             mcp=mcp,
         )
+        # Subscribed before the agent starts, so the caller sees every event.
+        # run() is otherwise silent for its whole duration — the agent loop
+        # prints nothing — which on a long run is indistinguishable from a
+        # hang. Repl has the TUI for this; run() had nothing.
+        if on_event:
+            session.logger.subscribe(on_event)
+
         agent = Agent(
             context=session.context,
             registry=session.registry,
@@ -355,7 +388,7 @@ def run(
         return agent.run()
     finally:
         if session:
-            session.logger.close()
+            session.logger.close(reason=_exit_reason())
             # MCP servers are our child processes; leaving one running would
             # leak both a process and whatever connection it holds. Subprocess
             # lifetime is session lifetime, which is only true if somebody
@@ -391,6 +424,7 @@ def repl(
     interactively). system/model/backend/api_key all default to config values.
     """
     session = None
+    reason = None
     if working_dir is None:
         working_dir = os.getcwd()
 
@@ -437,7 +471,11 @@ def repl(
             repl_instance.start()
     except KeyboardInterrupt:
         print("\nInterrupted.")
+        # Recorded explicitly: this except swallows the interrupt, so by the
+        # time the finally runs sys.exc_info() is already clear and the session
+        # would otherwise be filed as a clean exit.
+        reason = "interrupted"
     finally:
         if session:
-            session.logger.close()
+            session.logger.close(reason=_exit_reason(reason))
             _close_mcp_clients(session.mcp_clients)

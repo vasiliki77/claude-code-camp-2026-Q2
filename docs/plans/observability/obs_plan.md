@@ -141,6 +141,22 @@ being dropped.
 what it destroys, and record whether the agent re-walked mapped ground.
 Redesigning it is a separate piece of work.
 
+**Observed 05-08.** Compaction fired for the first time in any recorded session
+and behaved as written — it drops the oldest messages and keeps nothing. Two
+defects surfaced with it, detailed in [`layer1`](layer1) §1.6.1–1.6.2 and
+deferred:
+
+- **It cannot fire mid-turn.** The check sits outside the agent loop, so a
+  single long turn — which is exactly what a mapping run is — grows without ever
+  compacting until it hits the context window.
+- **`wrap_up` deflates the reading it depends on**, because the wind-down call
+  excludes tool definitions from `input_tokens`.
+
+Both sharpen the case for this layer rather than weakening it: **the redesign
+this layer contemplates is not optional polish.** As it stands the agent cannot
+compact during the one activity the project exists to perform, and the world
+graph is the summary it should be compacting into.
+
 ---
 
 ## 4. Decisions to settle
@@ -295,7 +311,7 @@ Scoped to the minimum effective path of §5.3.
    the agent re-walked ground it had already mapped.
 
 **Python only, decided 05-08.** The app is Python from here, so
-`week1_baseline/python/12_context/` is the single tree that changes and the
+`week2_capable/` is the single tree that changes and the
 week-1 parity discipline no longer applies. Ruby does not disappear — it stays
 as a *runtime*: `mud-manager --mcp` is a Ruby gem and remains the MCP daemon,
 and `log_viz` is a Ruby reader of the JSONL that works unchanged against

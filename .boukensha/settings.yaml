@@ -4,13 +4,24 @@ tasks:
     model: claude-haiku-4-5
     prompt_override:
       system: true
-    # Per-turn ceilings, all optional — the defaults shown are what step 12
+    # Per-turn ceilings, all optional — the commented defaults are what step 12
     # uses when the key is absent. 0 disables a ceiling.
-    # max_iterations: 25         # tool-call ceiling for one turn
-    # max_turn_tokens: 60000     # input+output tokens one turn may spend
+    #
+    # Restored after the 05-08 mapping run. That run used max_iterations: 80
+    # with max_turn_tokens disabled and cost $1.07 in 166 seconds — cost is not
+    # linear in iterations, because every call re-sends the whole conversation,
+    # so the last iterations cost several times the first.
+    #
+    # Both ceilings are ON by default now. Raise them deliberately, for one run,
+    # and put them back.
+    max_iterations: 25           # tool-call ceiling for one turn
+    max_turn_tokens: 60000       # input+output tokens one turn may spend
     # max_output_tokens: 1024    # per-call output cap
-    # compaction_threshold: 0.85 # fraction of the context window; lower it to
-    #                            # watch compaction fire without a long session
+    #
+    # Compaction still has never fired. The 05-08 run peaked around 25k tokens
+    # against a 30k trigger (0.15 of a 200k window) and stopped just short. A
+    # threshold near 0.08 would fire it — see layer1 §1.6.
+    compaction_threshold: 0.85
 mud:
   host: localhost
   port: 4000
