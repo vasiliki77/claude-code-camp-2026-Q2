@@ -1,5 +1,5 @@
 # Claude Code Camp
-This is the official repo for the Claude Code Camp operated by [ExamPro](https://www.exampro.co)
+This repo is created by a template of the Claude Code Camp repo operated by [ExamPro](https://www.exampro.co)
 
 ## Player Journey Agent
 
