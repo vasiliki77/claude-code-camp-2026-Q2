@@ -17,4 +17,8 @@ venv/
 # Generated CircleMUD world data (regenerate via week0_explore/bin/convert-world)
 week0_explore/preview/data/world/**/*.json
 
+# Derived session rollup (rebuilt from .boukensha/sessions/*.jsonl, which stay
+# tracked as the source of truth). Glob covers the -wal/-shm sidecars.
+.boukensha/sessions.db*
+
 *.gem

@@ -1,4 +1,5 @@
 import os
+import sys
 from types import SimpleNamespace
 
 from . import backends, models, runtime, tools as tools_lib
@@ -131,6 +132,27 @@ def _register_all_mcp(registry, mcp, cfg):
             )
 
     return clients
+
+
+def _exit_reason(explicit=None):
+    """How the session ended, for Logger.close.
+
+    Called from a finally block, where sys.exc_info() still reports whatever
+    exception is currently propagating — that is how an unhandled crash gets
+    told apart from a clean return without restructuring the control flow.
+    A caller that already handled its exception passes `explicit` instead,
+    because by then exc_info() has been cleared.
+    """
+    if explicit:
+        return explicit
+
+    exc = sys.exc_info()[0]
+    if exc is None:
+        return "completed"
+    if issubclass(exc, KeyboardInterrupt):
+        return "interrupted"
+
+    return "error"
 
 
 def _close_mcp_clients(clients):
@@ -355,7 +377,7 @@ def run(
         return agent.run()
     finally:
         if session:
-            session.logger.close()
+            session.logger.close(reason=_exit_reason())
             # MCP servers are our child processes; leaving one running would
             # leak both a process and whatever connection it holds. Subprocess
             # lifetime is session lifetime, which is only true if somebody
@@ -391,6 +413,7 @@ def repl(
     interactively). system/model/backend/api_key all default to config values.
     """
     session = None
+    reason = None
     if working_dir is None:
         working_dir = os.getcwd()
 
@@ -437,7 +460,11 @@ def repl(
             repl_instance.start()
     except KeyboardInterrupt:
         print("\nInterrupted.")
+        # Recorded explicitly: this except swallows the interrupt, so by the
+        # time the finally runs sys.exc_info() is already clear and the session
+        # would otherwise be filed as a clean exit.
+        reason = "interrupted"
     finally:
         if session:
-            session.logger.close()
+            session.logger.close(reason=_exit_reason(reason))
             _close_mcp_clients(session.mcp_clients)

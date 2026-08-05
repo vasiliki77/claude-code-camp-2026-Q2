@@ -1,6 +1,7 @@
 import json
 import re
 import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,11 +33,20 @@ class Logger:
         # Ruby creates this lazily inside subscribe(), because an unset ivar
         # reads as nil there. Python has no such excuse.
         self._subscribers = []
+        # Running totals for session_end. Accumulated here rather than re-summed
+        # by every reader, for the same reason response events carry their own
+        # cost: the file should be readable without replaying the run.
+        self._started_at = time.monotonic()
+        self._turns = 0
+        self._total_tokens = 0
+        self._total_cost_usd = 0.0
+        self._closed = False
         self._write_log({"phase": "session_start", **(snapshot or {})})
 
     # Unused in this step — nothing calls it yet. log_viz's parser already
     # handles a "turn" phase, so the reader side is waiting for it.
     def turn(self, *, n):
+        self._turns = max(self._turns, int(n))
         self._write_log({"phase": "turn", "n": n})
 
     def iteration(self, *, n, max):
@@ -55,17 +65,34 @@ class Logger:
             }
         )
 
+    # `messages` is included only when the last one is from the user.
+    #
+    # This event used to serialize the entire history on every iteration, which
+    # grows quadratically in turn length: 191 KB of one 224 KB session file was
+    # this one phase repeating itself. The only consumer is log_viz, which reads
+    # `messages[-1]` and only when it is the user message that opened the turn
+    # (log_viz/lib/log_viz/session.rb:77-86), so nothing downstream loses
+    # anything. The rest of the conversation is still fully reconstructible from
+    # the response and tool_result events.
+    #
+    # message_count stays on every event, so the history's *size* is still
+    # visible even when its contents are not.
+    # Built in two halves so `messages` keeps its original position between
+    # message_count and tool_count when it is present — key order is part of
+    # this file's output, per _write_log below.
     def prompt(self, *, messages, tools, context_window=None):
-        self._write_log(
+        event = {"phase": "prompt", "message_count": len(messages)}
+        if messages and getattr(messages[-1], "role", None) == "user":
+            event["messages"] = [self._serialize_message(m) for m in messages]
+        event.update(
             {
-                "phase": "prompt",
-                "message_count": len(messages),
-                "messages": [self._serialize_message(m) for m in messages],
                 "tool_count": len(tools),
                 "tools": list(tools.keys()),
                 "context_window": context_window,
             }
         )
+
+        self._write_log(event)
 
     def compaction(self, *, before, dropped, context_window):
         self._write_log(
@@ -106,9 +133,15 @@ class Logger:
             "usage": usage,
             "stop_reason": stop_reason,
         }
-        event.update(
-            self._execution_metadata(task=task, backend=backend, usage=usage)
+        metadata = self._execution_metadata(task=task, backend=backend, usage=usage)
+        event.update(metadata)
+        # Accumulate here rather than in _write_log: this is the only phase that
+        # carries usage, and reading it off the built event means the totals can
+        # never disagree with the lines they came from.
+        self._total_tokens += (metadata.get("input_tokens") or 0) + (
+            metadata.get("output_tokens") or 0
         )
+        self._total_cost_usd += metadata.get("cost_usd") or 0.0
         self._write_log(event)
 
     def raw(self, *, data):
@@ -122,8 +155,38 @@ class Logger:
     def subscribe(self, callback):
         self._subscribers.append(callback)
 
-    def close(self):
-        if self._log_io:
+    # reason: "completed" | "interrupted" | "error".
+    #
+    # Before this existed, close() shut the file and wrote nothing, so a clean
+    # exit, a Ctrl-C and a crash inside the agent loop were byte-identical on
+    # disk — 0 of 62 archived sessions record how they ended. That matters here
+    # beyond tidiness: "the session just stops" is also the shape a blocked
+    # player journey has, and the two have to be distinguishable.
+    #
+    # Idempotent, because the run and repl paths both close in a finally block
+    # and a future caller may well close twice.
+    def close(self, reason="completed"):
+        if self._closed:
+            return
+
+        self._closed = True
+        if self._log_io and not self._log_io.closed:
+            self._write_log(
+                {
+                    "phase": "session_end",
+                    "reason": reason,
+                    "turns": self._turns,
+                    "total_tokens": self._total_tokens,
+                    # None rather than 0.0 when nothing was priced: an unpriced
+                    # session and a free one are different claims.
+                    "total_cost_usd": (
+                        round(self._total_cost_usd, 6)
+                        if self._total_cost_usd
+                        else None
+                    ),
+                    "duration_s": round(time.monotonic() - self._started_at, 3),
+                }
+            )
             self._log_io.close()
 
     # ---------- private ---------------------------------------------------
