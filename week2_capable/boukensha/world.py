@@ -139,6 +139,62 @@ def unexplored(graph):
     return out
 
 
+def tedium(sessions):
+    """The boredom signal, computed rather than collected.
+
+    Nothing new has to be recorded for this: it falls out of the order rooms
+    were entered, which every session already has. That is the whole reason it
+    was the cheapest of the four report categories to answer.
+
+    Three measures, because "boring" is not one thing:
+
+      discovery_rate   new rooms per move. A run that stops finding anything is
+                       either finished exploring or stuck going in circles.
+      revisit_ratio    moves divided by distinct rooms. 1.0 is a perfect tour;
+                       3.0 means walking the same ground three times over.
+      longest_barren   the most consecutive moves that discovered nothing. This
+                       is the one that maps to what a player actually feels —
+                       not "few rooms" but "a long stretch where nothing was
+                       new".
+
+    Reported per session, because a short session and a long one are not
+    comparable and averaging them hides both.
+    """
+    out = []
+
+    for events in sessions:
+        entries = [e for e in events if e.get("event") == "room_entered"]
+        if not entries:
+            continue
+
+        seen = set()
+        barren = longest_barren = 0
+        for event in entries:
+            node = (
+                dark_id("", event.get("direction"))
+                if event.get("dark")
+                else room_id(event.get("room"), event.get("exits"))
+            )
+            if node in seen:
+                barren += 1
+                longest_barren = max(longest_barren, barren)
+            else:
+                seen.add(node)
+                barren = 0
+
+        out.append(
+            {
+                "moves": len(entries),
+                "distinct_rooms": len(seen),
+                "discovery_rate": round(len(seen) / len(entries), 3),
+                "revisit_ratio": round(len(entries) / len(seen), 2),
+                "longest_barren": longest_barren,
+            }
+        )
+
+    return out
+
+
 def to_mermaid(graph, max_rooms=60):
     """A Mermaid flowchart. Renders natively on GitHub and in the artifacts
     viewer, so the map needs no toolchain to look at — which is why this is the

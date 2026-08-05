@@ -18,9 +18,11 @@ Four things, in the order they are produced:
 | Artifact | Where | What it answers |
 | --- | --- | --- |
 | **Session log** | `.boukensha/sessions/*.jsonl` | exactly what the agent did, one JSON object per event |
-| **Session trace** | log_viz, `:4567` | one run, turn by turn, with cost |
-| **Dashboard** | Metabase, `:3000` | patterns across every run |
-| **World map** | `docs/maps/world.md` | the rooms, the passages, the walls |
+| **Session trace** | <http://localhost:4567> (log_viz) | one run, turn by turn, with cost |
+| **Dashboard** | <http://localhost:3000/dashboard/2> (Metabase) | patterns across every run |
+| **World map** | [`docs/maps/world.md`](maps/world.md) | the rooms, the passages, the walls |
+
+Both web tools need starting first — see §5. Neither runs by default.
 
 They share one identifier — the **session id** — so any number on a dashboard
 can be traced back to the exact model call that produced it. That traceability
@@ -80,13 +82,14 @@ per-run ceilings covered in §6.
 
 ## 4. Running the agent
 
-Set this once per shell:
-
 ```sh
 cd week2_capable
-export BOUKENSHA_DIR="$(cd .. && pwd)/.boukensha"
 PY=../.venv/bin/python
 ```
+
+The scripts find `.boukensha/` in the repo by themselves. Set `BOUKENSHA_DIR`
+only if you want them to read a config directory somewhere else — an explicit
+value always wins.
 
 | Command | What it does | Typical cost |
 | --- | --- | --- |
@@ -113,17 +116,62 @@ nothing, so you can see the shape of the output before spending anything.
 
 ### The dashboard — patterns across runs
 
+Start it (both commands are idempotent — safe to re-run any time):
+
 ```sh
 $PY examples/ingest_sessions.py          # rebuild the warehouse from the logs
 cd observability && docker compose up -d && python3 provision.py
 ```
 
-Open the printed URL, sign in with the printed credentials. Full detail in
-[`week2_capable/observability/README.md`](../week2_capable/observability/README.md).
+Then open:
 
-> **Re-run `ingest_sessions.py` after every agent run.** Metabase reads a
-> database built from the logs, not the logs themselves. Skip this and the
-> dashboard will quietly show you yesterday's world.
+| | |
+| --- | --- |
+| **Dashboard** | **<http://localhost:3000/dashboard/2>** |
+| Email | `observability@arcaneloop.local` |
+| Password | `ArcaneLoop2026!` |
+
+Override the credentials with `MB_ADMIN_EMAIL` / `MB_ADMIN_PASSWORD` before
+first provisioning. Metabase ships with a sample "E-commerce Insights"
+dashboard — ignore it; yours is **Player Journey — Observability**.
+
+**What is on it**, agent health first, because a finding about the game is only
+credible if the same run shows the agent was healthy:
+
+| Card | Answers |
+| --- | --- |
+| Session index | every run: when, how it ended, turns, cost, journey events |
+| Sessions by cost | what runs cost, worst first |
+| How sessions ended | clean exits vs interrupts vs crashes |
+| Tool calls and failures | did the agent's own tooling misbehave |
+| Journey events by type | what the player actually experienced |
+| Where players get blocked | **the findings** |
+| Most visited rooms | coverage and repetition |
+
+**Use the Session filter.** The box at the top narrows every card except the
+index to a single run. Paste an id from the index — or from a log_viz URL — and
+the whole page becomes that one playthrough. This is how a finding gets audited:
+pin the session, then click through to its trace and read the exact turn.
+
+#### Keeping it current
+
+**Metabase's auto-refresh re-runs its queries, not the pipeline.** The dashboard
+is a view over a database built from the logs, so a refreshing dashboard with
+nothing rebuilding that database shows you the same stale numbers more often —
+which looks like live data and is not.
+
+Leave the watcher running in its own terminal:
+
+```sh
+$PY examples/ingest_sessions.py --watch
+```
+
+It rebuilds within ten seconds of a session appearing or growing, and then
+auto-refresh does what it appears to do. Without it, re-run
+`$PY examples/ingest_sessions.py` by hand after every agent run.
+
+Full detail, including how to reset it from scratch, in
+[`week2_capable/observability/README.md`](../week2_capable/observability/README.md).
 
 ### The trace — one run in detail
 

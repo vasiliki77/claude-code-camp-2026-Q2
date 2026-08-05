@@ -31,10 +31,20 @@ keeps the corpus clean and stops the agent from wandering off to read files
 when the MUD frustrates it.
 """
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Default the config dir to this repo's .boukensha when the caller has not set
+# one. Without this, forgetting `export BOUKENSHA_DIR=...` sends Config looking
+# in ~/.boukensha, and the error names a path nobody chose. The week-1 launchers
+# did the same with `: "${BOUKENSHA_DIR:=...}"`; week2_capable has no launcher,
+# so the scripts carry it themselves.
+os.environ.setdefault(
+    "BOUKENSHA_DIR", str(Path(__file__).resolve().parents[2] / ".boukensha")
+)
 
 import boukensha  # noqa: E402
 

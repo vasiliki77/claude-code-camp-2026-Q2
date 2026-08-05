@@ -89,10 +89,25 @@ does not know rather than failing on them.
 ## Keeping it honest
 
 **`sessions.db` is a cache and goes stale.** It is rebuilt from the JSONL, never
-appended to. Metabase reads the database, not the log files — so after any agent
-run, re-run `examples/ingest_sessions.py` or the dashboard will quietly show you
-yesterday's world. This is not hypothetical: the database was three sessions
-behind within minutes of being wired up.
+appended to. Metabase reads the database, not the log files.
+
+**Metabase's auto-refresh does not help**, and is actively misleading about it:
+it re-runs the *queries*, not the pipeline that fills the database. A dashboard
+refreshing every minute over a database nobody is rebuilding shows the same
+stale numbers more often, with a spinner that reads as "live". Observed exactly
+that — 70 sessions on disk, 69 in the database, a dashboard refreshing happily.
+
+Leave the watcher running:
+
+```sh
+cd ../          # week2_capable
+BOUKENSHA_DIR="$(cd .. && pwd)/.boukensha" ../.venv/bin/python examples/ingest_sessions.py --watch
+```
+
+It polls the sessions directory and rebuilds within ten seconds of a session
+appearing *or growing* — the second matters, because a long run appends for
+minutes before it ends. Without it, run `ingest_sessions.py` by hand after every
+agent run.
 
 The database is mounted **read-only** into the container. Metabase must not
 write to it, and anything it did write would be destroyed by the next ingest.

@@ -1,8 +1,16 @@
+import os
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Default the config dir to the repo's .boukensha, matching examples/. Without
+# it, `python -m unittest discover -s test` from a clean shell looks in
+# ~/.boukensha and fails on a path nobody chose.
+os.environ.setdefault(
+    "BOUKENSHA_DIR", str(Path(__file__).resolve().parents[2] / ".boukensha")
+)
 
 import boukensha  # noqa: E402
 from boukensha import models  # noqa: E402

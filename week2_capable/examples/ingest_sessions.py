@@ -5,6 +5,11 @@ obs_plan.md §5 for why SQLite rather than DuckDB.
 
     python examples/ingest_sessions.py            # rebuild, then print the report
     python examples/ingest_sessions.py --report   # report only, no rebuild
+    python examples/ingest_sessions.py --watch    # rebuild whenever a session changes
+
+Leave `--watch` running in a terminal and Metabase's auto-refresh does what it
+looks like it does. Without it, auto-refresh re-runs the *queries* against a
+database nothing is rebuilding — the same stale numbers, more often.
 
 The database is a **cache**. The JSONL is the source of truth, stays tracked in
 git, and this rebuilds from scratch every time — dropping and recreating rather
@@ -39,6 +44,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -237,8 +243,44 @@ def report(db):
     )
 
 
+def fingerprint():
+    """Cheap change detector: how many session files there are, and the newest
+    modification time among them. Catches both a new session and an existing one
+    still being appended to."""
+    paths = list(SESSIONS.glob("*.jsonl"))
+    return len(paths), max((p.stat().st_mtime for p in paths), default=0)
+
+
+def watch(interval=10):
+    """Rebuild whenever the session logs change.
+
+    Metabase's auto-refresh re-runs its *queries*; it does not re-run this. The
+    dashboard is a view over a cache, so without something rebuilding the cache
+    a refreshing dashboard shows the same stale numbers more often — which looks
+    like live data and is not. This is that something.
+
+    Polling rather than inotify: stdlib only, works the same on WSL and macOS,
+    and at one directory of small files the cost is unmeasurable.
+    """
+    print(f"watching {SESSIONS} every {interval}s — Ctrl-C to stop")
+    last = None
+    try:
+        while True:
+            current = fingerprint()
+            if current != last:
+                build()
+                sessions, _ = current
+                print(f"  {sessions} sessions — dashboard is current\n", flush=True)
+                last = current
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nstopped watching")
+
+
 if __name__ == "__main__":
-    if "--report" in sys.argv:
+    if "--watch" in sys.argv:
+        watch()
+    elif "--report" in sys.argv:
         report(sqlite3.connect(DB))
     else:
         report(build())

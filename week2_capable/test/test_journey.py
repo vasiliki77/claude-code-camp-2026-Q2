@@ -157,6 +157,62 @@ class TestBlockedAndRejected(unittest.TestCase):
         self.assertEqual("command_rejected", events[0]["event"])
 
 
+class TestProgression(unittest.TestCase):
+    """`check score` — where "track progression paths" comes from.
+
+    This text sat in the logs from the first session onward, unparsed, while
+    the progression requirement went unanswered.
+    """
+
+    SCORE = (
+        "You are 18 years old.\r\n"
+        "You have 22(22) hit, 100(100) mana and 83(83) movement points.\r\n"
+        "Your armor class is 90/10, and your alignment is -38.\r\n"
+        "You have 815 exp, 32 gold coins, and 0 questpoints.\r\n"
+        "You need 1185 exp to reach your next level.\r\n"
+        "This ranks you as Dummy the Swordpupil (level 1).\r\n"
+        "You are standing.\r\n\r\n22H 100M 83V (news) (motd) > "
+    )
+
+    def event(self, text=None):
+        events = journey.parse("tbamud__check", {"kind": "score"}, text or self.SCORE)
+        return events[0] if events else None
+
+    def test_experience_and_level(self):
+        event = self.event()
+
+        self.assertEqual("progression", event["event"])
+        self.assertEqual(815, event["exp"])
+        self.assertEqual(1, event["level"])
+        self.assertEqual(1185, event["exp_to_next"])
+
+    def test_gold_and_health(self):
+        event = self.event()
+
+        self.assertEqual(32, event["gold"])
+        self.assertEqual(22, event["hp"])
+        self.assertEqual(22, event["max_hp"])
+
+    def test_thousands_separators_are_handled(self):
+        """A mid-level character's exp is comma-formatted; int() would raise."""
+        text = self.SCORE.replace("815 exp", "12,480 exp")
+
+        self.assertEqual(12480, self.event(text)["exp"])
+
+    def test_a_partial_score_still_parses(self):
+        """A capped character has no "you need N exp" line. Missing pieces come
+        back absent rather than failing the whole parse."""
+        text = "You have 815 exp, 32 gold coins, and 0 questpoints.\r\n\r\n22H 100M 83V > "
+        event = self.event(text)
+
+        self.assertEqual(815, event["exp"])
+        self.assertNotIn("exp_to_next", event)
+        self.assertNotIn("level", event)
+
+    def test_a_room_is_not_mistaken_for_a_score(self):
+        self.assertEqual("room_entered", journey.parse("tbamud__move", {}, MOVE_OK)[0]["event"])
+
+
 class TestToolNaming(unittest.TestCase):
     def test_prefixed_and_bare_names_behave_the_same(self):
         """Registration prefixes are a config choice; the parser must not care."""

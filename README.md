@@ -7,6 +7,11 @@ An agent that plays a MUD the way a new player would, maps the world, and
 reports where players get **confused, blocked, bored or overpowered**. Built for
 the Arcane Loop scenario, proven against CircleMUD.
 
+![A recorded session: the agent's tool calls and the MUD's replies in log_viz, alongside the Metabase dashboard](arcaneLoop.gif)
+
+*A recorded run, turn by turn — each tool call, the MUD's reply, and what it
+cost.*
+
 **→ [Operator's Guide](docs/user_guide.md)** — setup, running it, reading the
 results, what it costs, and what it does not yet do.
 
@@ -14,7 +19,6 @@ Quick look, free and offline:
 
 ```sh
 cd week2_capable
-export BOUKENSHA_DIR="$(cd .. && pwd)/.boukensha"
 ../.venv/bin/python examples/demo.py --offline
 ```
 

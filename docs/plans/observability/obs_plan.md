@@ -101,14 +101,21 @@ Candidate events, drawn from what `MudManager::Primitives` already exposes
 - `combat_resolved` — target, hp delta, outcome, flee
 - `progression` — xp / level / gold deltas
 
-The four report categories then become measurable rather than impressionistic:
+The four report categories then become measurable rather than impressionistic.
+**All four now carry data (05-08):**
 
-| Category | Signal |
-| --- | --- |
-| Confused | command-rejection rate; repeated `look`/`examine` on one target; re-reading an already-described room |
-| Blocked | same exit attempted N times and refused; a room whose only exits are locked with no key reachable upstream |
-| Bored | turns-per-newly-discovered-room rising; repeated identical command sequences; runs of rooms with no interactable content |
-| Overpowered | combat won at ~zero hp loss; xp/turn spiking; level far above the zone's design level |
+| Category | Signal | State |
+| --- | --- | --- |
+| Blocked | a refusal, with the reason kept apart — a locked door is a puzzle, a level gate is a wall | **12 events, 3 reasons** (`level_gated`, `closed_door`, `no_exit`) |
+| Confused | command-rejection rate; a reasonable command the game refuses without saying what to do instead | **18 events, still one message** — the signal works, the corpus is monotone |
+| Bored | revisit ratio, discovery rate, and the longest run of moves that found nothing new | **computed, no new data needed** — `world.tedium` |
+| Overpowered | experience against health risked, and how many repetitions a level costs | **first measurement** — see §7 |
+
+Two of these needed no collection at all. **Boredom is a property of the order
+rooms were entered**, which every session already recorded; and the progression
+numbers had been sitting in `check score` replies since the first session,
+unparsed. Both were implemented retroactively over the archive — the progression
+parser found 14 readings in sessions recorded before it existed.
 
 **Layer 2 cannot be designed until §4's decisions are settled**, because where
 the events are emitted determines what they can contain.
@@ -405,6 +412,24 @@ level."* — a room a low-level player can enter and then only leave the way the
 came. Five of the corpus's six blocks are in that one room. It is exactly the
 shape of finding the brief asks for, it is traceable to a `session_id` + `turn`
 + `iteration`, and nothing about it was predicted.
+
+**Second finding, once the agent finally fought something.** A small chipmunk
+gives **33 experience**. Level 2 needs **1,185** — so **35 kills** — and the
+whole session cost **2 health out of 22**.
+
+The interesting part is the pair, not either number: **the fights carry almost
+no risk, and the level takes 35 repetitions.** Neither "too easy" nor "too
+grindy" describes it alone; together they describe a newbie zone that is safe
+and slow at the same time. For a studio whose retention collapsed after an
+influx of new players, that is the shape of thing that loses them in the first
+session — which is precisely the question the brief was asked to answer.
+
+The boredom numbers agree independently: one session walked **29 moves through
+9 rooms, a 3.2× revisit ratio with an 8-move stretch that discovered nothing**.
+
+**Caveat kept with the finding**: the 33 exp is one kill. The 35-kills-per-level
+figure extrapolates from a single data point and needs two or three more to be
+worth reporting to anyone.
 
 **Python only, decided 05-08.** The app is Python from here, so
 `week2_capable/` is the single tree that changes and the

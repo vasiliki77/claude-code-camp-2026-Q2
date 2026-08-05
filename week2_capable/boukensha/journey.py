@@ -71,6 +71,19 @@ BLOCKED = [
 # about.
 DARK = re.compile(r"^It is pitch black\.\.\.", re.I)
 
+# `check score` — the progression readout, and the only place the game states
+# experience, level and gold outright. The brief asks the agent to "track
+# progression paths"; this is where those numbers come from.
+#
+# Parsed as separate patterns rather than one big regex because tbaMUD's score
+# block varies by character state — a dead or resting player gets extra lines,
+# and a level-1 character has no "you need N exp" line once capped. Missing
+# pieces come back absent rather than failing the whole parse.
+SCORE_HP = re.compile(r"You have (\d+)\((\d+)\) hit, (\d+)\((\d+)\) mana and (\d+)\((\d+)\) movement")
+SCORE_EXP = re.compile(r"You have ([\d,]+) exp, ([\d,]+) gold coins")
+SCORE_NEXT = re.compile(r"You need ([\d,]+) exp to reach your next level")
+SCORE_LEVEL = re.compile(r"This ranks you as (.+?) \(level (\d+)\)")
+
 # A command the game did not understand or could not apply. These are the
 # confusion signal — a real player types something reasonable and gets nothing
 # back that tells them what to do instead.
@@ -138,6 +151,40 @@ def parse_room(body):
     return lines[0].strip(), exits, doors
 
 
+def parse_progression(body):
+    """Experience, level, gold and health from a `check score` reply, or None.
+
+    Everything is optional except the exp line, which is what makes it a score
+    readout rather than some other multi-line reply. An integer that is absent
+    is absent, not zero — a character with no gold and a reply that did not
+    mention gold are different facts, and the whole telemetry design turns on
+    keeping that distinction.
+    """
+    exp = SCORE_EXP.search(body)
+    if not exp:
+        return None
+
+    def number(text):
+        return int(text.replace(",", ""))
+
+    out = {"exp": number(exp.group(1)), "gold": number(exp.group(2))}
+
+    if (level := SCORE_LEVEL.search(body)):
+        out["rank"] = level.group(1).strip()
+        out["level"] = int(level.group(2))
+    if (nxt := SCORE_NEXT.search(body)):
+        # The distance still to travel — the number a player feels as "grind".
+        out["exp_to_next"] = number(nxt.group(1))
+    if (hp := SCORE_HP.search(body)):
+        out.update(
+            hp=int(hp.group(1)), max_hp=int(hp.group(2)),
+            mana=int(hp.group(3)), max_mana=int(hp.group(4)),
+            movement=int(hp.group(5)), max_movement=int(hp.group(6)),
+        )
+
+    return out
+
+
 def parse(name, args, result):
     """Journey events for one tool call. A list, because one reply can carry
     more than one signal, and empty when it carries none.
@@ -157,6 +204,16 @@ def parse(name, args, result):
         return []
 
     events = []
+
+    # Checked first: a score readout carries no exit line and matches no
+    # refusal, so it would otherwise fall through to nothing at all — which is
+    # what left "track progression paths" unanswered while the numbers sat in
+    # the logs the whole time.
+    if (progression := parse_progression(body)):
+        events.append(
+            {"event": "progression", "command": command, "vitals": vitals, **progression}
+        )
+        return events
 
     for pattern, reason in BLOCKED:
         if pattern.search(body):

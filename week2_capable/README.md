@@ -21,18 +21,21 @@ for how the pieces fit together.
 | `boukensha/tools/mcp.py` | reads the MCP `isError` flag instead of discarding it |
 | `boukensha/logger.py` | `session_end` with reason and totals; `prompt` no longer re-serializes the whole history every iteration |
 | `boukensha/run.py` | `on_event=` so a run is not silent for its whole duration |
-| `boukensha/journey.py` | **Layer 2** — MUD replies parsed into player-journey events |
-| `boukensha/world.py` | **Layer 3** — journey events folded into a room graph |
+| `boukensha/journey.py` | **Layer 2** — MUD replies parsed into player-journey events, including the progression numbers from `check score` |
+| `boukensha/world.py` | **Layer 3** — journey events folded into a room graph, plus `tedium()` for the boredom signal |
+| `observability/` | the BI layer — Metabase over `sessions.db` |
 
 ## Running it
 
-All commands assume the repo root's virtualenv and config directory:
+All commands assume the repo root's virtualenv:
 
 ```sh
 cd week2_capable
-export BOUKENSHA_DIR="$(cd .. && pwd)/.boukensha"
 PY=../.venv/bin/python
 ```
+
+Every script defaults `BOUKENSHA_DIR` to the repo's `.boukensha/`, so no export
+is needed; setting it explicitly still wins, for a config directory elsewhere.
 
 | Command | What it does | Cost |
 | --- | --- | --- |
